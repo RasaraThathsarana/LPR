@@ -1,0 +1,288 @@
+"""
+Inference script for Swin UPerNet semantic segmentation.
+
+Create predictions on images or datasets.
+"""
+
+import argparse
+import torch
+import torch.nn.functional as F
+import numpy as np
+from pathlib import Path
+from PIL import Image
+import cv2
+from typing import Tuple, Optional
+
+from models import build_model
+from datasets import ADE20KDataset
+
+
+class SegmentationInferencer:
+    """Perform inference on images."""
+    
+    def __init__(
+        self,
+        checkpoint_path: str,
+        encoder_name: str = 'swin_base',
+        decoder_name: str = 'upernet',
+        adapter_name: str = None,
+        num_classes: int = 150,
+        device: str = 'cuda',
+    ):
+        self.device = device
+        self.num_classes = num_classes
+        
+        # Build model
+        self.model = build_model(
+            encoder_name=encoder_name,
+            decoder_name=decoder_name,
+            adapter_name=adapter_name,
+            num_classes=num_classes,
+            pretrained=False,
+        ).to(device)
+        
+        # Load checkpoint
+        self._load_checkpoint(checkpoint_path)
+        self.model.eval()
+    
+    def _load_checkpoint(self, checkpoint_path: str):
+        """Load checkpoint."""
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        if 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
+        
+        self.model.load_state_dict(state_dict, strict=False)
+    
+    @torch.no_grad()
+    def infer_image(
+        self,
+        image_path: str,
+        image_size: Tuple[int, int] = (512, 512),
+    ) -> np.ndarray:
+        """Infer on a single image.
+        
+        Args:
+            image_path: Path to image file
+            image_size: Target image size (H, W)
+            
+        Returns:
+            Segmentation map (H, W) with class indices
+        """
+        # Load image
+        image = Image.open(image_path).convert('RGB')
+        original_size = image.size  # (W, H)
+        
+        # Resize to target size
+        image_resized = image.resize(image_size[::-1], Image.BILINEAR)
+        
+        # Convert to tensor
+        image_array = np.array(image_resized, dtype=np.float32)
+        image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0)
+        image_tensor = image_tensor.to(self.device)
+        
+        # Normalize (ImageNet stats)
+        image_tensor = image_tensor / 255.0
+        image_tensor[:, 0] = (image_tensor[:, 0] - 0.485) / 0.229
+        image_tensor[:, 1] = (image_tensor[:, 1] - 0.456) / 0.224
+        image_tensor[:, 2] = (image_tensor[:, 2] - 0.406) / 0.225
+        
+        # Forward pass
+        output = self.model(image_tensor)  # (1, num_classes, H, W)
+        pred = output.argmax(dim=1)[0].cpu().numpy()  # (H, W)
+        
+        # Resize back to original size
+        pred_original = cv2.resize(
+            pred.astype(np.uint8),
+            original_size,
+            interpolation=cv2.INTER_NEAREST
+        )
+        
+        return pred_original
+    
+    @torch.no_grad()
+    def infer_dataset(
+        self,
+        dataset,
+        batch_size: int = 1,
+    ):
+        """Infer on a dataset."""
+        predictions = []
+        
+        for idx in range(len(dataset)):
+            print(f"Processing {idx+1}/{len(dataset)}...")
+            
+            sample = dataset[idx]
+            img = sample['img']
+            
+            # Normalize
+            img = img.astype(np.float32) / 255.0
+            img = (img - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            
+            # Convert to tensor
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)
+            img_tensor = img_tensor.to(self.device)
+            
+            # Forward pass
+            output = self.model(img_tensor)
+            pred = output.argmax(dim=1)[0].cpu().numpy()
+            
+            predictions.append(pred)
+        
+        return predictions
+
+
+def colorize_pred(pred: np.ndarray, palette) -> np.ndarray:
+    """Colorize prediction with palette.
+    
+    Args:
+        pred: Prediction (H, W) with class indices
+        palette: Color palette (num_classes, 3) with RGB values
+        
+    Returns:
+        Colored image (H, W, 3)
+    """
+    colored = np.zeros((pred.shape[0], pred.shape[1], 3), dtype=np.uint8)
+    
+    for class_id, color in enumerate(palette):
+        mask = pred == class_id
+        colored[mask] = color
+    
+    return colored
+
+
+def visualize_predictions(
+    image_path: str,
+    prediction_path: str,
+    output_path: str,
+    palette,
+    alpha: float = 0.5,
+):
+    """Visualize predictions alongside original image.
+    
+    Args:
+        image_path: Path to original image
+        prediction_path: Path to prediction file
+        output_path: Output path for visualization
+        palette: Color palette
+        alpha: Blending alpha
+    """
+    # Load image
+    image = Image.open(image_path)
+    image_array = np.array(image)
+    
+    # Load prediction
+    pred = np.load(prediction_path)
+    
+    # Colorize prediction
+    pred_colored = colorize_pred(pred, palette)
+    
+    # Blend
+    blended = cv2.addWeighted(
+        image_array,
+        1 - alpha,
+        pred_colored,
+        alpha,
+        0
+    )
+    
+    # Save
+    Image.fromarray(blended.astype(np.uint8)).save(output_path)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Infer with Swin UPerNet')
+    parser.add_argument(
+        '--checkpoint', type=str, required=True,
+        help='Path to checkpoint'
+    )
+    parser.add_argument(
+        '--image', type=str, default=None,
+        help='Path to image file'
+    )
+    parser.add_argument(
+        '--dataset-split', type=str, default=None,
+        choices=['training', 'validation'],
+        help='Dataset split to infer on'
+    )
+    parser.add_argument(
+        '--data-root', type=str, default='data/ade/ADEChallengeData2016',
+        help='Path to dataset root'
+    )
+    parser.add_argument(
+        '--output-dir', type=str, default='predictions',
+        help='Output directory for predictions'
+    )
+    parser.add_argument(
+        '--encoder', type=str, default='swin_base',
+        help='Encoder module name'
+    )
+    parser.add_argument(
+        '--decoder', type=str, default='upernet',
+        help='Decoder module name'
+    )
+    parser.add_argument(
+        '--adapter', type=str, default=None,
+        help='Optional adapter module name'
+    )
+    parser.add_argument(
+        '--device', type=str, default='cuda',
+        help='Device to use'
+    )
+    
+    args = parser.parse_args()
+    
+    # Create inferencer
+    inferencer = SegmentationInferencer(
+        checkpoint_path=args.checkpoint,
+        encoder_name=args.encoder,
+        decoder_name=args.decoder,
+        adapter_name=args.adapter,
+        device=args.device,
+    )
+    
+    # Get palette for visualization
+    palette = ADE20KDataset.get_palette()
+    
+    if args.image:
+        # Infer on single image
+        print(f"Inferring on {args.image}...")
+        pred = inferencer.infer_image(args.image)
+        
+        # Save prediction
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        pred_path = output_dir / (Path(args.image).stem + '_pred.npy')
+        np.save(str(pred_path), pred)
+        
+        # Visualize
+        viz_path = output_dir / (Path(args.image).stem + '_colored.png')
+        colored = colorize_pred(pred, palette)
+        Image.fromarray(colored).save(str(viz_path))
+        
+        print(f"Saved prediction to {pred_path}")
+        print(f"Saved visualization to {viz_path}")
+    
+    elif args.dataset_split:
+        # Infer on dataset
+        print(f"Inferring on {args.dataset_split} split...")
+        
+        dataset = ADE20KDataset(
+            data_root=args.data_root,
+            split=args.dataset_split,
+        )
+        
+        predictions = inferencer.infer_dataset(dataset)
+        
+        # Save predictions
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        for idx, pred in enumerate(predictions):
+            pred_path = output_dir / f'pred_{idx:06d}.npy'
+            np.save(str(pred_path), pred)
+        
+        print(f"Saved {len(predictions)} predictions to {output_dir}")
