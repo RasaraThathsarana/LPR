@@ -15,6 +15,7 @@ from typing import Tuple, Optional
 
 from models import build_model
 from datasets import ADE20KDataset
+from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 
 
 class SegmentationInferencer:
@@ -212,6 +213,10 @@ if __name__ == '__main__':
         help='Path to dataset root'
     )
     parser.add_argument(
+        '--download-data', action='store_true',
+        help='Download ADE20K dataset automatically if missing'
+    )
+    parser.add_argument(
         '--output-dir', type=str, default='predictions',
         help='Output directory for predictions'
     )
@@ -270,6 +275,7 @@ if __name__ == '__main__':
         # Infer on dataset
         print(f"Inferring on {args.dataset_split} split...")
         
+        ensure_ade20k_dataset(args.data_root, download=args.download_data)
         dataset = ADE20KDataset(
             data_root=args.data_root,
             split=args.dataset_split,

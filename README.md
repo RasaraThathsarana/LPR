@@ -70,6 +70,12 @@ mkdir -p data/ade
 unzip ADEChallengeData2016.zip -d data/ade/
 ```
 
+Alternatively, training and inference can automatically download the dataset if it is missing:
+
+```bash
+python train.py --config swin_tiny --download-data
+```
+
 ### 4. Verify setup
 
 ```bash
@@ -83,6 +89,9 @@ python -c "from ade20k_preprocessing import ADE20KDataset; print('✓ Setup OK')
 ```bash
 # Train Swin Tiny (default, recommended for testing)
 python train.py --config swin_tiny
+
+# Train Swin Tiny and download ADE20K automatically if missing
+python train.py --config swin_tiny --download-data
 
 # Train Swin Base (slower but better performance)
 python train.py --config swin_base

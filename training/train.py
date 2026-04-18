@@ -19,6 +19,7 @@ import time
 
 from models import build_model
 from configs import CONFIG
+from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 
 
 class Trainer:
@@ -293,9 +294,15 @@ def train(args):
     
     # Load configuration
     config = CONFIG[args.config]
+    if args.data_root:
+        config['data_root'] = args.data_root
+
     print(f"Config: {args.config}")
     print(f"Configuration: {json.dumps(config, indent=2)}")
-    
+
+    # Ensure dataset is available
+    ensure_ade20k_dataset(config['data_root'], download=args.download_data)
+
     # Import data loading utilities
     from datasets import create_train_loader, create_val_loader
     from datasets.ade20k_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
@@ -359,6 +366,8 @@ if __name__ == '__main__':
                        help='Model configuration')
     parser.add_argument('--data-root', type=str, default='data/ade/ADEChallengeData2016',
                        help='Path to ADE20K dataset')
+    parser.add_argument('--download-data', action='store_true',
+                       help='Download ADE20K dataset automatically if missing')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                        help='Directory to save checkpoints')
     parser.add_argument('--log-dir', type=str, default='logs',
