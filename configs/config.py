@@ -16,8 +16,8 @@ BASE_CONFIG = {
     
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
-        'max_iters': 160000,
-        'val_interval': 16000,  # Validate every 16k iterations
+        'max_iters': 20000, #160000,
+        'val_interval': 2000, #16000,  # Validate every 16k iterations
     },
     
     # Data loading
@@ -118,7 +118,7 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 4,  # Might need to reduce batch size for base model
+    'batch_size': 8,  # Might need to reduce batch size for base model
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
