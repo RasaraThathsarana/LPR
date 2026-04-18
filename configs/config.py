@@ -16,8 +16,8 @@ BASE_CONFIG = {
     
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
-        'max_iters': 20000, #160000,
-        'val_interval': 2000, #16000,  # Validate every 16k iterations
+        'max_iters': 1000, #160000,
+        'val_interval': 20, #16000,  # Validate every 16k iterations
     },
     
     # Data loading
