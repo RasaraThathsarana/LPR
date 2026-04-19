@@ -250,21 +250,20 @@ class Trainer:
         self.current_iter = checkpoint['iter']
         self.current_epoch = checkpoint['epoch']
     
-    def train(self, num_epochs: int, val_interval: int = 1):
+    def train(self):
         """Train the model."""
         max_iters = self.config['train_cfg']['max_iters']
+        val_interval_iters = self.config['train_cfg']['val_interval']
         
-        print(f"Starting training for {num_epochs} epochs ({max_iters} iterations)...")
+        print(f"Starting training for {max_iters} iterations (validating every {val_interval_iters} iterations)...")
         
         while self.current_iter < max_iters:
-            self.current_epoch += 1
-            
             # Train one epoch
             train_loss = self.train_epoch()
             print(f"Epoch {self.current_epoch}: avg loss = {train_loss:.4f}")
             
-            # Validate
-            if self.current_epoch % val_interval == 0:
+            # Validate based on iterations
+            if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
                 print("Running validation...")
                 metrics = self.validate()
                 print(f"mIoU: {metrics['mIoU']:.4f}, mAcc: {metrics['mAcc']:.4f}")
@@ -353,10 +352,7 @@ def train(args):
         trainer.load_checkpoint(args.load_from)
     
     # Train
-    trainer.train(
-        num_epochs=config['num_epochs'],
-        val_interval=config['val_interval']
-    )
+    trainer.train()
 
 
 if __name__ == '__main__':
