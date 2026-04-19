@@ -52,12 +52,45 @@ class SegmentationInferencer:
         """Load checkpoint."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
-        if 'model' in checkpoint:
+        # 1. Look for 'state_dict' which MMSegmentation uses
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        elif 'model' in checkpoint:
             state_dict = checkpoint['model']
         else:
             state_dict = checkpoint
         
-        self.model.load_state_dict(state_dict, strict=False)
+        # 2. Translate keys from MMSegmentation to native PyTorch implementation
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            # Skip auxiliary heads (not implemented in this simple UPerNet)
+            if k.startswith('auxiliary_head'):
+                continue
+                
+            # Map Swin Backbone keys
+            if k.startswith('backbone.'):
+                k = k.replace('backbone.', 'encoder.')
+                k = k.replace('.stages.', '.layers.')
+                k = k.replace('.attn.w_msa.', '.attn.')
+                k = k.replace('patch_embed.projection.', 'patch_embed.proj.')
+                
+            # Map UPerNet Decoder keys
+            elif k.startswith('decode_head.'):
+                k = k.replace('decode_head.', 'decoder.')
+                k = k.replace('conv_seg.', 'cls_seg.')
+                
+                # Map mmcv ConvModule to native nn.Sequential indices
+                if 'psp_modules' in k:
+                    k = k.replace('.conv.', '.1.').replace('.bn.', '.2.')
+                elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
+                    k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
+
+            new_state_dict[k] = v
+        
+        missing_keys, unexpected_keys = self.model.load_state_dict(new_state_dict, strict=False)
+        
+        if missing_keys or unexpected_keys:
+            print(f"Warning: Loaded with {len(missing_keys)} missing keys and {len(unexpected_keys)} unexpected keys.")
     
     @torch.no_grad()
     def infer_image(
