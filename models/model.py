@@ -7,6 +7,13 @@ from typing import Optional
 from .base import EncoderDecoderModel, SegmentationModel
 from .adapters import build_adapter
 
+SWIN_URLS = {
+    'swin_tiny': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth',
+    'swin_small': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_small_patch4_window7_224.pth',
+    'swin_base': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_base_patch4_window7_224.pth',
+    'swin_large': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_large_patch4_window7_224_22k.pth'
+}
+
 
 def _import_encoder(name: str):
     try:
@@ -25,9 +32,16 @@ def _import_decoder(name: str):
 def load_checkpoint_smart(model: torch.nn.Module, state_dict: dict):
     """Load checkpoint with MMSegmentation key translation."""
     new_state_dict = {}
+    
+    # Check if this is a pure backbone checkpoint from Microsoft
+    is_pure_backbone = any(k.startswith('patch_embed.') or k.startswith('layers.') for k in state_dict.keys())
+    
     for k, v in state_dict.items():
-        if k.startswith('auxiliary_head'):
+        if k.startswith('auxiliary_head') or k.startswith('head.'):
             continue
+            
+        if is_pure_backbone and not k.startswith('encoder.') and not k.startswith('decoder.'):
+            k = 'encoder.' + k
             
         if k.startswith('backbone.'):
             k = k.replace('backbone.', 'encoder.')
@@ -82,9 +96,17 @@ def build_model(
 
     model = EncoderDecoderModel(encoder=encoder, decoder=decoder, adapter=adapter)
 
-    if pretrained and pretrain_path:
-        checkpoint = torch.load(pretrain_path, map_location='cpu')
-        state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
-        load_checkpoint_smart(model, state_dict)
+    if pretrained:
+        state_dict = None
+        if pretrain_path:
+            checkpoint = torch.load(pretrain_path, map_location='cpu')
+            state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+        elif encoder_name in SWIN_URLS:
+            print(f"Auto-downloading Microsoft Official ImageNet weights for {encoder_name}...")
+            checkpoint = torch.hub.load_state_dict_from_url(SWIN_URLS[encoder_name], map_location='cpu')
+            state_dict = checkpoint.get('model', checkpoint)
+            
+        if state_dict is not None:
+            load_checkpoint_smart(model, state_dict)
 
     return model

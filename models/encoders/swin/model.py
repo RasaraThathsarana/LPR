@@ -298,7 +298,8 @@ class PatchEmbed(nn.Module):
         self.in_chans = in_chans
         self.embed_dim = embed_dim
 
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        # MMSegmentation disables bias in patch embed when norm_layer is used
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, bias=norm_layer is None)
         if norm_layer is not None:
             self.norm = norm_layer(embed_dim)
         else:

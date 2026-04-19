@@ -127,7 +127,7 @@ class Trainer:
                 segs = batch_data['gt_semantic_seg'].to(self.device)  # (B, H, W)
                 
                 # Forward pass with mixed precision
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     outputs = self.model(imgs)  # (B, num_classes, H, W)
                     # Compute loss
                     loss = self.criterion(outputs, segs)
@@ -345,7 +345,7 @@ class Trainer:
                     segs = batch_data['gt_semantic_seg'].to(self.device)
                     
                     # Forward pass with mixed precision
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast('cuda'):
                         outputs = self.model(imgs)
                         loss = self.criterion(outputs, segs)
                     

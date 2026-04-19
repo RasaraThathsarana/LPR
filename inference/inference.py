@@ -119,9 +119,8 @@ class SegmentationInferencer:
         Returns:
             Segmentation map (H, W) with class indices
         """
-        # Load image in RGB
+        # Load image in BGR (pipeline will natively convert to RGB)
         image = cv2.imread(image_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         original_size = (image.shape[1], image.shape[0])  # (W, H)
         
         # Apply official validation pipeline
