@@ -277,10 +277,35 @@ class Trainer:
     def load_checkpoint(self, checkpoint_path: str):
         """Load checkpoint."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model'], strict=False)
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
-        self.current_iter = checkpoint['iter']
-        self.current_epoch = checkpoint['epoch']
+        state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+        
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('auxiliary_head'): continue
+            if k.startswith('backbone.'):
+                k = k.replace('backbone.', 'encoder.')
+                k = k.replace('.stages.', '.layers.')
+                k = k.replace('.attn.w_msa.', '.attn.')
+                k = k.replace('patch_embed.projection.', 'patch_embed.proj.')
+                k = k.replace('.ffn.layers.0.0.', '.mlp.fc1.')
+                k = k.replace('.ffn.layers.1.', '.mlp.fc2.')
+            elif k.startswith('decode_head.'):
+                k = k.replace('decode_head.', 'decoder.')
+                k = k.replace('conv_seg.', 'cls_seg.')
+                if 'psp_modules' in k:
+                    k = k.replace('.conv.', '.1.').replace('.bn.', '.2.')
+                elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
+                    k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
+            new_state_dict[k] = v
+            
+        self.model.load_state_dict(new_state_dict, strict=False)
+        
+        if 'optimizer' in checkpoint:
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+        if 'iter' in checkpoint:
+            self.current_iter = checkpoint['iter']
+        if 'epoch' in checkpoint:
+            self.current_epoch = checkpoint['epoch']
     
     def train(self):
         """Train the model with iteration-based validation."""

@@ -24,6 +24,7 @@ TRAIN_PIPELINE = [
     dict(type='RandomCrop', crop_size=CROP_SIZE, cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
     dict(type='PhotoMetricDistortion'),
+    dict(type='Normalize', mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=False),
     dict(type='PackSegInputs')
 ]
 
@@ -33,6 +34,7 @@ VAL_PIPELINE = [
     dict(type='LoadImageFromFile'),
     dict(type='Resize', scale=(2048, 512), keep_ratio=True),
     dict(type='LoadAnnotations', reduce_zero_label=True),
+    dict(type='Normalize', mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=False),
     dict(type='PackSegInputs')
 ]
 
@@ -45,7 +47,7 @@ NUM_WORKERS = 4
 IMG_NORM_CFG = dict(
     mean=[123.675, 116.28, 103.53],  # ImageNet mean in RGB
     std=[58.395, 57.12, 57.375],     # ImageNet std in RGB
-    to_rgb=True
+    to_rgb=False  # Dataset already loads as RGB
 )
 
 # Preprocessing summary:

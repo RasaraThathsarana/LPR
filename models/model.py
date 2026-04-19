@@ -22,6 +22,34 @@ def _import_decoder(name: str):
         raise ValueError(f'Unknown decoder: {name}') from error
 
 
+def load_checkpoint_smart(model: torch.nn.Module, state_dict: dict):
+    """Load checkpoint with MMSegmentation key translation."""
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('auxiliary_head'):
+            continue
+            
+        if k.startswith('backbone.'):
+            k = k.replace('backbone.', 'encoder.')
+            k = k.replace('.stages.', '.layers.')
+            k = k.replace('.attn.w_msa.', '.attn.')
+            k = k.replace('patch_embed.projection.', 'patch_embed.proj.')
+            k = k.replace('.ffn.layers.0.0.', '.mlp.fc1.')
+            k = k.replace('.ffn.layers.1.', '.mlp.fc2.')
+            
+        elif k.startswith('decode_head.'):
+            k = k.replace('decode_head.', 'decoder.')
+            k = k.replace('conv_seg.', 'cls_seg.')
+            if 'psp_modules' in k:
+                k = k.replace('.conv.', '.1.').replace('.bn.', '.2.')
+            elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
+                k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
+        new_state_dict[k] = v
+        
+    missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
+    if missing or unexpected:
+        print(f"Warning: Loaded with {len(missing)} missing keys and {len(unexpected)} unexpected keys.")
+
 def build_model(
     encoder_name: str = 'swin_tiny',
     decoder_name: str = 'upernet',
@@ -56,7 +84,7 @@ def build_model(
 
     if pretrained and pretrain_path:
         checkpoint = torch.load(pretrain_path, map_location='cpu')
-        state_dict = checkpoint.get('model', checkpoint)
-        model.load_state_dict(state_dict, strict=False)
+        state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+        load_checkpoint_smart(model, state_dict)
 
     return model

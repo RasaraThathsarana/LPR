@@ -73,6 +73,8 @@ class SegmentationInferencer:
                 k = k.replace('.stages.', '.layers.')
                 k = k.replace('.attn.w_msa.', '.attn.')
                 k = k.replace('patch_embed.projection.', 'patch_embed.proj.')
+                k = k.replace('.ffn.layers.0.0.', '.mlp.fc1.')
+                k = k.replace('.ffn.layers.1.', '.mlp.fc2.')
                 
             # Map UPerNet Decoder keys
             elif k.startswith('decode_head.'):
