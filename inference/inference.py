@@ -17,7 +17,10 @@ from typing import Tuple, Optional
 from models import build_model
 from datasets import ADE20KDataset
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
+from datasets.ade20k_preprocessing.preprocessing import build_pipeline
+from datasets.ade20k_preprocessing.preprocessing_config import VAL_PIPELINE
 from evaluation.evaluation import SegmentationMetrics
+from configs import CONFIG
 
 
 class SegmentationInferencer:
@@ -30,10 +33,15 @@ class SegmentationInferencer:
         decoder_name: str = 'upernet',
         adapter_name: str = None,
         num_classes: int = 150,
+        encoder_kwargs: dict = None,
+        decoder_kwargs: dict = None,
         device: str = 'cuda',
     ):
         self.device = device
         self.num_classes = num_classes
+        
+        # Build identical preprocessing pipeline to training
+        self.pipeline = build_pipeline(VAL_PIPELINE)
         
         # Build model
         self.model = build_model(
@@ -41,6 +49,8 @@ class SegmentationInferencer:
             decoder_name=decoder_name,
             adapter_name=adapter_name,
             num_classes=num_classes,
+            encoder_kwargs=encoder_kwargs,
+            decoder_kwargs=decoder_kwargs,
             pretrained=False,
         ).to(device)
         
@@ -109,26 +119,23 @@ class SegmentationInferencer:
         Returns:
             Segmentation map (H, W) with class indices
         """
-        # Load image
-        image = Image.open(image_path).convert('RGB')
-        original_size = image.size  # (W, H)
+        # Load image in RGB
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        original_size = (image.shape[1], image.shape[0])  # (W, H)
         
-        # Resize to target size
-        image_resized = image.resize(image_size[::-1], Image.BILINEAR)
+        # Apply official validation pipeline
+        sample = {
+            'img': image,
+            'gt_semantic_seg': np.zeros((image.shape[0], image.shape[1]), dtype=np.int32),
+        }
+        processed = self.pipeline(sample)
         
         # Convert to tensor
-        image_array = np.array(image_resized, dtype=np.float32)
-        image_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0)
-        image_tensor = image_tensor.to(self.device)
-        
-        # Normalize (ImageNet stats)
-        image_tensor = image_tensor / 255.0
-        image_tensor[:, 0] = (image_tensor[:, 0] - 0.485) / 0.229
-        image_tensor[:, 1] = (image_tensor[:, 1] - 0.456) / 0.224
-        image_tensor[:, 2] = (image_tensor[:, 2] - 0.406) / 0.225
+        img_tensor = torch.from_numpy(processed['img']).unsqueeze(0).to(self.device)
         
         # Forward pass
-        output = self.model(image_tensor)  # (1, num_classes, H, W)
+        output = self.model(img_tensor)  # (1, num_classes, H, W)
         pred = output.argmax(dim=1)[0].cpu().numpy()  # (H, W)
         
         # Resize back to original size
@@ -154,24 +161,26 @@ class SegmentationInferencer:
             print(f"Processing {idx+1}/{len(dataset)}...")
             
             sample = dataset[idx]
-            img = sample['img']
-            gt = sample.get('gt_semantic_seg')
+            original_gt = sample.get('gt_semantic_seg')
+            if original_gt is not None:
+                original_gt = original_gt.copy()
             
-            # Normalize
-            img = img.astype(np.float32) / 255.0
-            img = (img - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            # Apply official validation pipeline (Resize + Normalize + Pack)
+            processed = self.pipeline(sample)
             
             # Convert to tensor
-            img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)
-            img_tensor = img_tensor.to(self.device)
+            img_tensor = torch.from_numpy(processed['img']).unsqueeze(0).to(self.device)
             
             # Forward pass
             output = self.model(img_tensor)
             pred = output.argmax(dim=1)[0].cpu().numpy()
             predictions.append(pred)
             
-            if gt is not None:
-                metrics.update(pred, gt)
+            if original_gt is not None:
+                # The pipeline evaluates against the original unresized ground truth size
+                if pred.shape != original_gt.shape:
+                    pred = cv2.resize(pred.astype(np.uint8), (original_gt.shape[1], original_gt.shape[0]), interpolation=cv2.INTER_NEAREST)
+                metrics.update(pred, original_gt)
         
         return {
             'predictions': predictions,
@@ -283,12 +292,25 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
+    # Smart configuration loading mapped from the --encoder string
+    if args.encoder in CONFIG:
+        cfg = CONFIG[args.encoder]
+        encoder_name = cfg['model']['encoder']
+        encoder_kwargs = cfg['model'].get('encoder_kwargs', {})
+        decoder_kwargs = cfg['model'].get('decoder_kwargs', {})
+    else:
+        encoder_name = args.encoder
+        encoder_kwargs = {}
+        decoder_kwargs = {}
+    
     # Create inferencer
     inferencer = SegmentationInferencer(
         checkpoint_path=args.checkpoint,
-        encoder_name=args.encoder,
+        encoder_name=encoder_name,
         decoder_name=args.decoder,
         adapter_name=args.adapter,
+        encoder_kwargs=encoder_kwargs,
+        decoder_kwargs=decoder_kwargs,
         device=args.device,
     )
     
