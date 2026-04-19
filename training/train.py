@@ -193,11 +193,14 @@ class Trainer:
 
                     # Resize prediction to match ground truth shape if needed
                     if pred.shape != seg.shape:
-                        pred = cv2.resize(
-                            pred.astype(np.uint8),
-                            (seg.shape[1], seg.shape[0]),
-                            interpolation=cv2.INTER_NEAREST
-                        )
+                        if pred.shape[0] >= seg.shape[0] and pred.shape[1] >= seg.shape[1]:
+                            pred = pred[:seg.shape[0], :seg.shape[1]]
+                        else:
+                            pred = cv2.resize(
+                                pred.astype(np.uint8),
+                                (seg.shape[1], seg.shape[0]),
+                                interpolation=cv2.INTER_NEAREST
+                            )
 
                     pred = pred.flatten()
                     seg = seg.flatten()
@@ -228,27 +231,25 @@ class Trainer:
             fn = hist[i, :].sum() - tp
             
             if tp + fp + fn == 0:
-                iou = 0.0
+                ious.append(np.nan)
             else:
-                iou = tp / (tp + fp + fn)
-            
-            ious.append(iou)
+                ious.append(tp / (tp + fp + fn))
         
-        miou = np.mean(ious)
+        miou = np.nanmean(ious)
         
         accs = []
         for i in range(num_classes):
             total = hist[i, :].sum()
             if total == 0:
-                accs.append(0.0)
+                accs.append(np.nan)
             else:
                 accs.append(hist[i, i] / total)
 
-        all_acc = np.trace(hist) / hist.sum() if hist.sum() > 0 else 0.0
+        all_acc = np.trace(hist) / hist.sum() if hist.sum() > 0 else np.nan
         
         return {
             'mIoU': miou,
-            'mAcc': np.mean(accs),
+            'mAcc': np.nanmean(accs),
             'allAcc': all_acc,
         }
 

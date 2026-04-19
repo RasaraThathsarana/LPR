@@ -31,11 +31,14 @@ class SegmentationMetrics:
             gt: Ground truth (H, W) with class indices
         """
         if pred.shape != gt.shape:
-            pred = cv2.resize(
-                pred.astype(np.uint8),
-                (gt.shape[1], gt.shape[0]),
-                interpolation=cv2.INTER_NEAREST
-            )
+            if pred.shape[0] >= gt.shape[0] and pred.shape[1] >= gt.shape[1]:
+                pred = pred[:gt.shape[0], :gt.shape[1]]
+            else:
+                pred = cv2.resize(
+                    pred.astype(np.uint8),
+                    (gt.shape[1], gt.shape[0]),
+                    interpolation=cv2.INTER_NEAREST
+                )
 
         pred = pred.flatten()
         gt = gt.flatten()
@@ -62,13 +65,11 @@ class SegmentationMetrics:
             fn = self.hist[i, :].sum() - tp
             
             if tp + fp + fn == 0:
-                iou = 0.0
+                ious.append(np.nan)
             else:
-                iou = tp / (tp + fp + fn)
-            
-            ious.append(iou)
+                ious.append(tp / (tp + fp + fn))
         
-        return np.mean(ious)
+        return np.nanmean(ious)
     
     def compute_macc(self) -> float:
         """Compute mean Accuracy per class."""
@@ -78,13 +79,11 @@ class SegmentationMetrics:
             total = self.hist[i, :].sum()
             
             if total == 0:
-                acc = 0.0
+                accs.append(np.nan)
             else:
-                acc = tp / total
-            
-            accs.append(acc)
+                accs.append(tp / total)
         
-        return np.mean(accs)
+        return np.nanmean(accs)
     
     def compute_pxa(self) -> float:
         """Compute pixel-wise Accuracy."""
@@ -107,7 +106,7 @@ class SegmentationMetrics:
             fn = self.hist[i, :].sum() - tp
             
             if tp + fp + fn == 0:
-                iou = 0.0
+                iou = np.nan
             else:
                 iou = tp / (tp + fp + fn)
             

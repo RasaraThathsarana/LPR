@@ -119,8 +119,9 @@ class SegmentationInferencer:
         Returns:
             Segmentation map (H, W) with class indices
         """
-        # Load image in BGR (pipeline will natively convert to RGB)
+        # Load image natively as RGB
         image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         original_size = (image.shape[1], image.shape[0])  # (W, H)
         
         # Apply official validation pipeline
@@ -138,11 +139,14 @@ class SegmentationInferencer:
         pred = output.argmax(dim=1)[0].cpu().numpy()  # (H, W)
         
         # Resize back to original size
-        pred_original = cv2.resize(
-            pred.astype(np.uint8),
-            original_size,
-            interpolation=cv2.INTER_NEAREST
-        )
+        if pred.shape[0] >= original_size[1] and pred.shape[1] >= original_size[0]:
+            pred_original = pred[:original_size[1], :original_size[0]]
+        else:
+            pred_original = cv2.resize(
+                pred.astype(np.uint8),
+                original_size,
+                interpolation=cv2.INTER_NEAREST
+            )
         
         return pred_original
     
@@ -178,7 +182,10 @@ class SegmentationInferencer:
             if original_gt is not None:
                 # The pipeline evaluates against the original unresized ground truth size
                 if pred.shape != original_gt.shape:
-                    pred = cv2.resize(pred.astype(np.uint8), (original_gt.shape[1], original_gt.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    if pred.shape[0] >= original_gt.shape[0] and pred.shape[1] >= original_gt.shape[1]:
+                        pred = pred[:original_gt.shape[0], :original_gt.shape[1]]
+                    else:
+                        pred = cv2.resize(pred.astype(np.uint8), (original_gt.shape[1], original_gt.shape[0]), interpolation=cv2.INTER_NEAREST)
                 metrics.update(pred, original_gt)
         
         return {
