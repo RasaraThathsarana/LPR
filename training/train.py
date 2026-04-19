@@ -58,6 +58,9 @@ class Trainer:
         # Setup tensorboard
         self.writer = SummaryWriter(str(self.log_dir))
         
+        # Setup AMP scaler for mixed precision
+        self.scaler = torch.cuda.amp.GradScaler()
+        
         # Training state
         self.current_iter = 0
         self.current_epoch = 0
@@ -123,17 +126,19 @@ class Trainer:
                 imgs = batch_data['img'].to(self.device)  # (B, 3, H, W)
                 segs = batch_data['gt_semantic_seg'].to(self.device)  # (B, H, W)
                 
-                # Forward pass
-                outputs = self.model(imgs)  # (B, num_classes, H, W)
-                
-                # Compute loss
-                loss = self.criterion(outputs, segs)
+                # Forward pass with mixed precision
+                with torch.cuda.amp.autocast():
+                    outputs = self.model(imgs)  # (B, num_classes, H, W)
+                    # Compute loss
+                    loss = self.criterion(outputs, segs)
                 
                 # Backward pass
                 self.optimizer.zero_grad()
-                loss.backward()
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
                 
                 # Update scheduler
                 self.scheduler.step(self.current_iter)
@@ -265,6 +270,8 @@ class Trainer:
             'iter': self.current_iter,
             'epoch': self.current_epoch,
             'config': self.config,
+            'best_miou': self.best_miou,
+            'scaler': self.scaler.state_dict(),
         }
         
         path = self.checkpoint_dir / f'iter_{self.current_iter}.pth'
@@ -306,6 +313,10 @@ class Trainer:
             self.current_iter = checkpoint['iter']
         if 'epoch' in checkpoint:
             self.current_epoch = checkpoint['epoch']
+        if 'best_miou' in checkpoint:
+            self.best_miou = checkpoint['best_miou']
+        if 'scaler' in checkpoint:
+            self.scaler.load_state_dict(checkpoint['scaler'])
     
     def train(self):
         """Train the model with iteration-based validation."""
@@ -333,15 +344,18 @@ class Trainer:
                     imgs = batch_data['img'].to(self.device)
                     segs = batch_data['gt_semantic_seg'].to(self.device)
                     
-                    # Forward pass
-                    outputs = self.model(imgs)
-                    loss = self.criterion(outputs, segs)
+                    # Forward pass with mixed precision
+                    with torch.cuda.amp.autocast():
+                        outputs = self.model(imgs)
+                        loss = self.criterion(outputs, segs)
                     
                     # Backward pass
                     self.optimizer.zero_grad()
-                    loss.backward()
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    self.optimizer.step()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
                     
                     # Update scheduler
                     self.scheduler.step(self.current_iter)

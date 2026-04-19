@@ -64,6 +64,7 @@ SWIN_TINY_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.2,
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [96, 192, 384, 768],
@@ -99,6 +100,7 @@ SWIN_SMALL_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [96, 192, 384, 768],
@@ -134,6 +136,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
+            'use_checkpoint': True,  # Enabled to save memory
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -169,6 +172,7 @@ SWIN_LARGE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
+            'use_checkpoint': True,  # Enabled to save memory
         },
         'decoder_kwargs': {
             'in_channels': [192, 384, 768, 1536],

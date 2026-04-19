@@ -47,7 +47,7 @@ NUM_WORKERS = 4
 IMG_NORM_CFG = dict(
     mean=[123.675, 116.28, 103.53],  # ImageNet mean in RGB
     std=[58.395, 57.12, 57.375],     # ImageNet std in RGB
-    to_rgb=False  # Dataset already loads as RGB
+    to_rgb=False
 )
 
 # Preprocessing summary:

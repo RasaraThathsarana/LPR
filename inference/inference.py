@@ -345,6 +345,7 @@ if __name__ == '__main__':
         dataset = ADE20KDataset(
             data_root=args.data_root,
             split=args.dataset_split,
+            reduce_zero_label=True,
         )
         
         results = inferencer.infer_dataset(dataset)

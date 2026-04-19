@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
 from typing import List, Optional, Sequence, Tuple
 
 from ...base import Encoder
@@ -252,9 +253,11 @@ class PatchMerging(nn.Module):
 class BasicLayer(nn.Module):
     def __init__(self, dim, depth, num_heads, window_size=7,
                  mlp_ratio=4., qkv_bias=True, drop=0., attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None):
+                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None,
+                 use_checkpoint=False):
         super().__init__()
         self.depth = depth
+        self.use_checkpoint = use_checkpoint
 
         # build blocks
         self.blocks = nn.ModuleList([
@@ -274,7 +277,10 @@ class BasicLayer(nn.Module):
 
     def forward(self, x, H, W):
         for blk in self.blocks:
-            x = blk(x, H, W)
+            if self.use_checkpoint and self.training:
+                x = checkpoint.checkpoint(blk, x, H, W, use_reentrant=False)
+            else:
+                x = blk(x, H, W)
         
         if self.downsample is not None:
             x_down = self.downsample(x, H, W)
@@ -328,6 +334,7 @@ class SwinEncoder(Encoder):
         qkv_bias: bool = True,
         drop_rate: float = 0.,
         attn_drop_rate: float = 0.,
+        use_checkpoint: bool = False,
         norm_layer=nn.LayerNorm,
     ):
         super().__init__()
@@ -356,6 +363,7 @@ class SwinEncoder(Encoder):
                 attn_drop=attn_drop_rate,
                 drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],
                 norm_layer=norm_layer,
+                use_checkpoint=use_checkpoint,
                 downsample=PatchMerging if (i_layer < self.num_layers - 1) else None)
             self.layers.append(layer)
 
