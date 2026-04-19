@@ -4,6 +4,7 @@ Evaluation utilities for semantic segmentation.
 Provides metrics like mIoU, mAcc, pixel accuracy, etc.
 """
 
+import cv2
 import numpy as np
 import torch
 from typing import Dict, Tuple
@@ -29,6 +30,13 @@ class SegmentationMetrics:
             pred: Predictions (H, W) with class indices
             gt: Ground truth (H, W) with class indices
         """
+        if pred.shape != gt.shape:
+            pred = cv2.resize(
+                pred.astype(np.uint8),
+                (gt.shape[1], gt.shape[0]),
+                interpolation=cv2.INTER_NEAREST
+            )
+
         pred = pred.flatten()
         gt = gt.flatten()
         

@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
+import cv2
 from pathlib import Path
 from tqdm import tqdm
 from typing import Dict, Tuple
@@ -182,8 +183,19 @@ class Trainer:
                 
                 # Compute confusion matrix
                 for pred, seg in zip(preds, segs):
-                    pred = pred.cpu().numpy().flatten()
-                    seg = seg.cpu().numpy().flatten()
+                    pred = pred.cpu().numpy()
+                    seg = seg.cpu().numpy()
+
+                    # Resize prediction to match ground truth shape if needed
+                    if pred.shape != seg.shape:
+                        pred = cv2.resize(
+                            pred.astype(np.uint8),
+                            (seg.shape[1], seg.shape[0]),
+                            interpolation=cv2.INTER_NEAREST
+                        )
+
+                    pred = pred.flatten()
+                    seg = seg.flatten()
                     
                     # Ignore label 255
                     mask = seg != 255
@@ -219,11 +231,31 @@ class Trainer:
         
         miou = np.mean(ious)
         
+        accs = []
+        for i in range(num_classes):
+            total = hist[i, :].sum()
+            if total == 0:
+                accs.append(0.0)
+            else:
+                accs.append(hist[i, i] / total)
+
+        all_acc = np.trace(hist) / hist.sum() if hist.sum() > 0 else 0.0
+        
         return {
             'mIoU': miou,
-            'mAcc': np.mean([hist[i, i] / hist[i, :].sum() for i in range(num_classes)]),
-            'allAcc': np.trace(hist) / hist.sum(),
+            'mAcc': np.mean(accs),
+            'allAcc': all_acc,
         }
+
+    def _update_hist(self, hist: np.ndarray, preds: torch.Tensor, segs: torch.Tensor) -> np.ndarray:
+        """Update confusion matrix histogram from model predictions."""
+        num_classes = self.config['num_classes']
+        for pred, seg in zip(preds, segs):
+            pred = pred.cpu().numpy().flatten()
+            seg = seg.cpu().numpy().flatten()
+            mask = seg != 255
+            hist += self._compute_hist(pred[mask], seg[mask], num_classes)
+        return hist
     
     def save_checkpoint(self, is_best: bool = False):
         """Save checkpoint."""
@@ -254,8 +286,11 @@ class Trainer:
         """Train the model with iteration-based validation."""
         max_iters = self.config['train_cfg']['max_iters']
         val_interval_iters = self.config['train_cfg']['val_interval']
+        num_classes = self.config['num_classes']
         
         print(f"Starting training for {max_iters} iterations (validating every {val_interval_iters} iterations)...")
+        
+        train_hist = np.zeros((num_classes, num_classes))
         
         while self.current_iter < max_iters:
             self.current_epoch += 1
@@ -290,6 +325,7 @@ class Trainer:
                     total_loss += loss.item()
                     num_batches += 1
                     self.current_iter += 1
+                    train_hist = self._update_hist(train_hist, outputs.argmax(dim=1), segs)
                     
                     # Log
                     pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
@@ -309,11 +345,16 @@ class Trainer:
                     
                     # Validate at specified iteration intervals
                     if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
-                        print(f"\n[Iter {self.current_iter}] Running validation...")
+                        train_metrics = self._compute_miou(train_hist)
+                        print(f"\n[Iter {self.current_iter}] Train mIoU: {train_metrics['mIoU']:.4f}, Train mAcc: {train_metrics['mAcc']:.4f}")
+                        
+                        print(f"[Iter {self.current_iter}] Running validation...")
                         metrics = self.validate()
-                        print(f"[Iter {self.current_iter}] mIoU: {metrics['mIoU']:.4f}, mAcc: {metrics['mAcc']:.4f}\n")
+                        print(f"[Iter {self.current_iter}] Val mIoU: {metrics['mIoU']:.4f}, Val mAcc: {metrics['mAcc']:.4f}\n")
                         
                         # Log metrics
+                        self.writer.add_scalar('train/mIoU', train_metrics['mIoU'], self.current_iter)
+                        self.writer.add_scalar('train/mAcc', train_metrics['mAcc'], self.current_iter)
                         self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
                         self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
                         
@@ -324,6 +365,9 @@ class Trainer:
                             self.save_checkpoint(is_best=True)
                         else:
                             self.save_checkpoint()
+                        
+                        # Reset training histogram after logging
+                        train_hist = np.zeros((num_classes, num_classes))
                         
                         # Resume training mode
                         self.model.train()
