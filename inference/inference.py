@@ -83,7 +83,7 @@ class SegmentationInferencer:
                 
                 # Map mmcv ConvModule to native nn.Sequential indices
                 if 'psp_modules' in k:
-                    k = k.replace('.conv.', '.1.').replace('.bn.', '.2.')
+                    k = k.replace('.1.conv.', '.1.').replace('.1.bn.', '.2.')
                 elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
                     k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
 
