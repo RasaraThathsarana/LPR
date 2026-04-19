@@ -5,6 +5,7 @@ Create predictions on images or datasets.
 """
 
 import argparse
+import json
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -16,6 +17,7 @@ from typing import Tuple, Optional
 from models import build_model
 from datasets import ADE20KDataset
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
+from evaluation.evaluation import SegmentationMetrics
 
 
 class SegmentationInferencer:
@@ -109,14 +111,16 @@ class SegmentationInferencer:
         dataset,
         batch_size: int = 1,
     ):
-        """Infer on a dataset."""
+        """Infer on a dataset and compute metrics."""
         predictions = []
+        metrics = SegmentationMetrics(self.num_classes)
         
         for idx in range(len(dataset)):
             print(f"Processing {idx+1}/{len(dataset)}...")
             
             sample = dataset[idx]
             img = sample['img']
+            gt = sample.get('gt_semantic_seg')
             
             # Normalize
             img = img.astype(np.float32) / 255.0
@@ -129,10 +133,15 @@ class SegmentationInferencer:
             # Forward pass
             output = self.model(img_tensor)
             pred = output.argmax(dim=1)[0].cpu().numpy()
-            
             predictions.append(pred)
+            
+            if gt is not None:
+                metrics.update(pred, gt)
         
-        return predictions
+        return {
+            'predictions': predictions,
+            'metrics': metrics.compute_all_metrics() if len(dataset) > 0 else {},
+        }
 
 
 def colorize_pred(pred: np.ndarray, palette) -> np.ndarray:
@@ -281,14 +290,37 @@ if __name__ == '__main__':
             split=args.dataset_split,
         )
         
-        predictions = inferencer.infer_dataset(dataset)
+        results = inferencer.infer_dataset(dataset)
+        predictions = results['predictions']
+        metrics = results['metrics']
         
-        # Save predictions
+        # Save predictions and metrics
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        prediction_files = []
         for idx, pred in enumerate(predictions):
             pred_path = output_dir / f'pred_{idx:06d}.npy'
             np.save(str(pred_path), pred)
+            prediction_files.append(str(pred_path.name))
+        
+        metrics_path = output_dir / f'metrics_{args.dataset_split}.json'
+        with open(metrics_path, 'w', encoding='utf-8') as metrics_file:
+            json.dump(metrics, metrics_file, indent=2)
+        
+        summary = {
+            'split': args.dataset_split,
+            'num_predictions': len(predictions),
+            'prediction_files': prediction_files,
+            'metrics': metrics,
+        }
+        summary_path = output_dir / f'summary_{args.dataset_split}.json'
+        with open(summary_path, 'w', encoding='utf-8') as summary_file:
+            json.dump(summary, summary_file, indent=2)
         
         print(f"Saved {len(predictions)} predictions to {output_dir}")
+        print(f"Validation metrics saved to {metrics_path}")
+        print(f"Summary saved to {summary_path}")
+        print("Metrics:")
+        for key, value in metrics.items():
+            print(f"  {key}: {value:.4f}")
