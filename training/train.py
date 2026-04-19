@@ -143,7 +143,7 @@ class Trainer:
                 self.current_iter += 1
                 
                 # Log
-                pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+                pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
                 
                 # Log to tensorboard every log_interval
                 if self.current_iter % self.config['log_interval'] == 0:
@@ -251,34 +251,82 @@ class Trainer:
         self.current_epoch = checkpoint['epoch']
     
     def train(self):
-        """Train the model."""
+        """Train the model with iteration-based validation."""
         max_iters = self.config['train_cfg']['max_iters']
         val_interval_iters = self.config['train_cfg']['val_interval']
         
         print(f"Starting training for {max_iters} iterations (validating every {val_interval_iters} iterations)...")
         
         while self.current_iter < max_iters:
-            # Train one epoch
-            train_loss = self.train_epoch()
-            print(f"Epoch {self.current_epoch}: avg loss = {train_loss:.4f}")
+            self.current_epoch += 1
+            self.model.train()
             
-            # Validate based on iterations
-            if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
-                print("Running validation...")
-                metrics = self.validate()
-                print(f"mIoU: {metrics['mIoU']:.4f}, mAcc: {metrics['mAcc']:.4f}")
-                
-                # Log metrics
-                self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
-                self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
-                
-                # Save checkpoint
-                is_best = metrics['mIoU'] > self.best_miou
-                if is_best:
-                    self.best_miou = metrics['mIoU']
-                    self.save_checkpoint(is_best=True)
-                else:
-                    self.save_checkpoint()
+            total_loss = 0.0
+            num_batches = 0
+            
+            with tqdm(self.train_loader, desc=f'Epoch {self.current_epoch}') as pbar:
+                for batch_data in pbar:
+                    # Stop if we've reached max iterations
+                    if self.current_iter >= max_iters:
+                        break
+                    
+                    imgs = batch_data['img'].to(self.device)
+                    segs = batch_data['gt_semantic_seg'].to(self.device)
+                    
+                    # Forward pass
+                    outputs = self.model(imgs)
+                    loss = self.criterion(outputs, segs)
+                    
+                    # Backward pass
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    self.optimizer.step()
+                    
+                    # Update scheduler
+                    self.scheduler.step(self.current_iter)
+                    
+                    # Update metrics
+                    total_loss += loss.item()
+                    num_batches += 1
+                    self.current_iter += 1
+                    
+                    # Log
+                    pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
+                    
+                    # Log to tensorboard every log_interval
+                    if self.current_iter % self.config['log_interval'] == 0:
+                        self.writer.add_scalar(
+                            'train/loss',
+                            loss.item(),
+                            self.current_iter
+                        )
+                        self.writer.add_scalar(
+                            'train/lr',
+                            self.optimizer.param_groups[0]['lr'],
+                            self.current_iter
+                        )
+                    
+                    # Validate at specified iteration intervals
+                    if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
+                        print(f"\n[Iter {self.current_iter}] Running validation...")
+                        metrics = self.validate()
+                        print(f"[Iter {self.current_iter}] mIoU: {metrics['mIoU']:.4f}, mAcc: {metrics['mAcc']:.4f}\n")
+                        
+                        # Log metrics
+                        self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
+                        self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
+                        
+                        # Save checkpoint
+                        is_best = metrics['mIoU'] > self.best_miou
+                        if is_best:
+                            self.best_miou = metrics['mIoU']
+                            self.save_checkpoint(is_best=True)
+                        else:
+                            self.save_checkpoint()
+                        
+                        # Resume training mode
+                        self.model.train()
         
         print("Training completed!")
         self.writer.close()

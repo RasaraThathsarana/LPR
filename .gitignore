@@ -1,5 +1,6 @@
 *.pth
 *.pt
+*.log
 checkpoints/
 logs/
 outputs/
