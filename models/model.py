@@ -8,9 +8,9 @@ from .base import EncoderDecoderModel, SegmentationModel
 from .adapters import build_adapter
 
 SWIN_URLS = {
-    'swin_tiny': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth',
-    'swin_small': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_small_patch4_window7_224.pth',
-    'swin_base': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_base_patch4_window7_224.pth',
+    'swin_tiny': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224_22k.pth',
+    'swin_small': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_small_patch4_window7_224_22k.pth',
+    'swin_base': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_base_patch4_window7_224_22k.pth',
     'swin_large': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_large_patch4_window7_224_22k.pth'
 }
 
@@ -168,7 +168,7 @@ def build_model(
             checkpoint = torch.load(pretrain_path, map_location='cpu')
             state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
         elif encoder_name in SWIN_URLS:
-            print(f"Auto-downloading Microsoft Official ImageNet weights for {encoder_name}...")
+            print(f"Auto-downloading Microsoft Official ImageNet-22k weights for {encoder_name}...")
             checkpoint = torch.hub.load_state_dict_from_url(SWIN_URLS[encoder_name], map_location='cpu')
             state_dict = checkpoint.get('model', checkpoint)
             
