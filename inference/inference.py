@@ -7,14 +7,13 @@ Create predictions on images or datasets.
 import argparse
 import json
 import torch
-import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
 from PIL import Image
 import cv2
-from typing import Tuple, Optional
 
 from models import build_model
+from models.model import translate_checkpoint_state_dict
 from datasets import ADE20KDataset
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 from datasets.ade20k_preprocessing.preprocessing import build_pipeline
@@ -35,6 +34,9 @@ class SegmentationInferencer:
         num_classes: int = 150,
         encoder_kwargs: dict = None,
         decoder_kwargs: dict = None,
+        use_auxiliary_decoder: bool = True,
+        auxiliary_kwargs: dict = None,
+        input_norm_cfg: dict = None,
         device: str = 'cuda',
     ):
         self.device = device
@@ -51,6 +53,9 @@ class SegmentationInferencer:
             num_classes=num_classes,
             encoder_kwargs=encoder_kwargs,
             decoder_kwargs=decoder_kwargs,
+            use_auxiliary_decoder=use_auxiliary_decoder,
+            auxiliary_kwargs=auxiliary_kwargs,
+            input_norm_cfg=input_norm_cfg,
             pretrained=False,
         ).to(device)
         
@@ -70,35 +75,7 @@ class SegmentationInferencer:
         else:
             state_dict = checkpoint
         
-        # 2. Translate keys from MMSegmentation to native PyTorch implementation
-        new_state_dict = {}
-        for k, v in state_dict.items():
-            # Skip auxiliary heads (not implemented in this simple UPerNet)
-            if k.startswith('auxiliary_head'):
-                continue
-                
-            # Map Swin Backbone keys
-            if k.startswith('backbone.'):
-                k = k.replace('backbone.', 'encoder.')
-                k = k.replace('.stages.', '.layers.')
-                k = k.replace('.attn.w_msa.', '.attn.')
-                k = k.replace('patch_embed.projection.', 'patch_embed.proj.')
-                k = k.replace('.ffn.layers.0.0.', '.mlp.fc1.')
-                k = k.replace('.ffn.layers.1.', '.mlp.fc2.')
-                
-            # Map UPerNet Decoder keys
-            elif k.startswith('decode_head.'):
-                k = k.replace('decode_head.', 'decoder.')
-                k = k.replace('conv_seg.', 'cls_seg.')
-                
-                # Map mmcv ConvModule to native nn.Sequential indices
-                if 'psp_modules' in k:
-                    k = k.replace('.1.conv.', '.1.').replace('.1.bn.', '.2.')
-                elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
-                    k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
-
-            new_state_dict[k] = v
-        
+        new_state_dict = translate_checkpoint_state_dict(state_dict)
         missing_keys, unexpected_keys = self.model.load_state_dict(new_state_dict, strict=False)
         
         if missing_keys or unexpected_keys:
@@ -108,13 +85,11 @@ class SegmentationInferencer:
     def infer_image(
         self,
         image_path: str,
-        image_size: Tuple[int, int] = (512, 512),
     ) -> np.ndarray:
         """Infer on a single image.
         
         Args:
             image_path: Path to image file
-            image_size: Target image size (H, W)
             
         Returns:
             Segmentation map (H, W) with class indices
@@ -154,7 +129,6 @@ class SegmentationInferencer:
     def infer_dataset(
         self,
         dataset,
-        batch_size: int = 1,
     ):
         """Infer on a dataset and compute metrics."""
         predictions = []
@@ -304,10 +278,16 @@ if __name__ == '__main__':
         encoder_name = cfg['model']['encoder']
         encoder_kwargs = cfg['model'].get('encoder_kwargs', {})
         decoder_kwargs = cfg['model'].get('decoder_kwargs', {})
+        use_auxiliary_decoder = cfg['model'].get('use_auxiliary_decoder', True)
+        auxiliary_kwargs = cfg['model'].get('auxiliary_kwargs', {})
+        input_norm_cfg = cfg.get('data_preprocessor', {})
     else:
         encoder_name = args.encoder
         encoder_kwargs = {}
         decoder_kwargs = {}
+        use_auxiliary_decoder = True
+        auxiliary_kwargs = {}
+        input_norm_cfg = {}
     
     # Create inferencer
     inferencer = SegmentationInferencer(
@@ -317,6 +297,9 @@ if __name__ == '__main__':
         adapter_name=args.adapter,
         encoder_kwargs=encoder_kwargs,
         decoder_kwargs=decoder_kwargs,
+        use_auxiliary_decoder=use_auxiliary_decoder,
+        auxiliary_kwargs=auxiliary_kwargs,
+        input_norm_cfg=input_norm_cfg,
         device=args.device,
     )
     
