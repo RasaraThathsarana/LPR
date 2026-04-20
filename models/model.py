@@ -15,6 +15,19 @@ SWIN_URLS = {
 }
 
 
+def _count_parameters(module: Optional[torch.nn.Module]):
+    """Count total and trainable parameters of a module."""
+    if module is None:
+        return 0, 0
+    total = sum(p.numel() for p in module.parameters())
+    trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    return total, trainable
+
+
+def _format_params(num: int) -> str:
+    """Format parameter count to millions."""
+    return f"{num / 1e6:.2f}M"
+
 def _import_encoder(name: str):
     try:
         return importlib.import_module(f'models.encoders.{name}')
@@ -29,8 +42,8 @@ def _import_decoder(name: str):
         raise ValueError(f'Unknown decoder: {name}') from error
 
 
-def load_checkpoint_smart(model: torch.nn.Module, state_dict: dict):
-    """Load checkpoint with MMSegmentation key translation."""
+def translate_checkpoint_state_dict(state_dict: dict) -> dict:
+    """Translate MMSegmentation checkpoint keys to the local module layout."""
     new_state_dict = {}
     
     # Check if this is a pure backbone checkpoint from Microsoft
@@ -59,10 +72,17 @@ def load_checkpoint_smart(model: torch.nn.Module, state_dict: dict):
             elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
                 k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
         new_state_dict[k] = v
-        
+
+    return new_state_dict
+
+
+def load_checkpoint_smart(model: torch.nn.Module, state_dict: dict):
+    """Load checkpoint with MMSegmentation key translation."""
+    new_state_dict = translate_checkpoint_state_dict(state_dict)
     missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
     if missing or unexpected:
         print(f"Warning: Loaded with {len(missing)} missing keys and {len(unexpected)} unexpected keys.")
+
 
 def build_model(
     encoder_name: str = 'swin_tiny',
@@ -72,6 +92,9 @@ def build_model(
     encoder_kwargs: Optional[dict] = None,
     adapter_kwargs: Optional[dict] = None,
     decoder_kwargs: Optional[dict] = None,
+    use_auxiliary_decoder: bool = True,
+    auxiliary_kwargs: Optional[dict] = None,
+    input_norm_cfg: Optional[dict] = None,
     pretrained: bool = False,
     pretrain_path: Optional[str] = None,
 ) -> SegmentationModel:
@@ -87,14 +110,57 @@ def build_model(
     encoder_kwargs = encoder_kwargs or {}
     adapter_kwargs = adapter_kwargs or {}
     decoder_kwargs = decoder_kwargs or {}
+    auxiliary_kwargs = auxiliary_kwargs or {}
 
     encoder = encoder_module.build_encoder(**encoder_kwargs)
     adapter = None
     if adapter_name:
         adapter = build_adapter(adapter_name, **adapter_kwargs)
     decoder = decoder_module.build_decoder(**decoder_kwargs, num_classes=num_classes)
+    aux_head = None
+    if use_auxiliary_decoder and hasattr(decoder_module, 'build_auxiliary_head'):
+        aux_config = {'num_classes': num_classes}
+        aux_config.update(auxiliary_kwargs)
+        aux_head = decoder_module.build_auxiliary_head(**aux_config)
 
-    model = EncoderDecoderModel(encoder=encoder, decoder=decoder, adapter=adapter)
+    # Print Model Assembly Summary
+    enc_total, enc_train = _count_parameters(encoder)
+    dec_total, dec_train = _count_parameters(decoder)
+    adp_total, adp_train = _count_parameters(adapter)
+    aux_total, aux_train = _count_parameters(aux_head)
+    
+    total_params = enc_total + dec_total + adp_total + aux_total
+    total_train = enc_train + dec_train + adp_train + aux_train
+    
+    print("\n========================================================================")
+    print("Model Assembly")
+    print("========================================================================")
+    print(f"Encoder           : {encoder_name}")
+    print(f"  params          : {_format_params(enc_total)} total | {_format_params(enc_train)} trainable")
+    print(f"Decoder           : {decoder_name}")
+    print(f"  params          : {_format_params(dec_total)} total | {_format_params(dec_train)} trainable")
+    if adapter:
+        print(f"Adapter           : {adapter_name}")
+        print(f"  params          : {_format_params(adp_total)} total | {_format_params(adp_train)} trainable")
+    else:
+        print("Adapter           : disabled")
+    if aux_head:
+        print(f"Aux decoder       : {decoder_name}")
+        print(f"  params          : {_format_params(aux_total)} total | {_format_params(aux_train)} trainable")
+    else:
+        print("Aux decoder       : disabled")
+    print("------------------------------------------------------------------------")
+    print(f"Total params      : {_format_params(total_params)}")
+    print(f"Trainable params  : {_format_params(total_train)}")
+    print("========================================================================\n")
+
+    model = EncoderDecoderModel(
+        encoder=encoder,
+        decoder=decoder,
+        adapter=adapter,
+        aux_head=aux_head,
+        input_norm_cfg=input_norm_cfg,
+    )
 
     if pretrained:
         state_dict = None

@@ -23,7 +23,7 @@ Quick start:
     trainer = Trainer(model, train_loader, val_loader, CONFIG['swin_tiny'])
     
     # Train
-    trainer.train(num_epochs=160)
+    trainer.train()
 
 For more information, see README.md, SETUP.md, and TRAINING.md.
 """
@@ -31,24 +31,15 @@ For more information, see README.md, SETUP.md, and TRAINING.md.
 __version__ = '1.0.0'
 __author__ = 'Segmentation Framework'
 
-from .models import (
-    SimpleSwinUperNet,
-    SegmentationModel,
-    build_model,
-)
+from .models import EncoderDecoderModel, SegmentationModel, build_model
 from .configs import CONFIG
-from .evaluation import (
-    SegmentationMetrics,
-    evaluate,
-    CheckpointManager,
-)
+from .evaluation import SegmentationMetrics, evaluate
 
 __all__ = [
-    'SimpleSwinUperNet',
+    'EncoderDecoderModel',
     'SegmentationModel',
     'build_model',
     'CONFIG',
     'SegmentationMetrics',
     'evaluate',
-    'CheckpointManager',
 ]

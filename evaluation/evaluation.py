@@ -7,8 +7,7 @@ Provides metrics like mIoU, mAcc, pixel accuracy, etc.
 import cv2
 import numpy as np
 import torch
-from typing import Dict, Tuple
-from pathlib import Path
+from typing import Dict
 
 
 class SegmentationMetrics:
@@ -149,82 +148,6 @@ def evaluate(
             metrics.update(pred.cpu().numpy(), seg.cpu().numpy())
     
     return metrics.compute_all_metrics()
-
-
-class CheckpointManager:
-    """Manage checkpoints."""
-    
-    def __init__(self, checkpoint_dir: str, max_keep: int = 3):
-        self.checkpoint_dir = Path(checkpoint_dir)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.max_keep = max_keep
-        self.checkpoints = []
-    
-    def save(
-        self,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        iteration: int,
-        metrics: Dict[str, float],
-        is_best: bool = False,
-    ):
-        """Save checkpoint.
-        
-        Args:
-            model: Model to save
-            optimizer: Optimizer state
-            iteration: Current iteration
-            metrics: Metrics dictionary
-            is_best: Whether this is the best model
-        """
-        checkpoint = {
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'iteration': iteration,
-            'metrics': metrics,
-        }
-        
-        # Save checkpoint
-        path = self.checkpoint_dir / f'iter_{iteration}.pth'
-        torch.save(checkpoint, str(path))
-        self.checkpoints.append((iteration, metrics['mIoU']))
-        
-        # Save best model
-        if is_best:
-            best_path = self.checkpoint_dir / 'best_model.pth'
-            torch.save(checkpoint, str(best_path))
-        
-        # Remove old checkpoints if exceeding max_keep
-        if len(self.checkpoints) > self.max_keep:
-            self.checkpoints.sort(key=lambda x: x[1], reverse=True)
-            
-            # Keep top max_keep checkpoints
-            to_keep = set(iter for iter, _ in self.checkpoints[:self.max_keep])
-            
-            # Remove others
-            for iter, _ in self.checkpoints[self.max_keep:]:
-                path = self.checkpoint_dir / f'iter_{iter}.pth'
-                if path.exists():
-                    path.unlink()
-            
-            self.checkpoints = self.checkpoints[:self.max_keep]
-    
-    def load_best(self, device: str = 'cpu') -> Dict:
-        """Load best checkpoint."""
-        best_path = self.checkpoint_dir / 'best_model.pth'
-        if best_path.exists():
-            return torch.load(str(best_path), map_location=device)
-        return None
-    
-    def load_latest(self, device: str = 'cpu') -> Dict:
-        """Load latest checkpoint."""
-        checkpoints = sorted(
-            self.checkpoint_dir.glob('iter_*.pth'),
-            key=lambda x: int(x.stem.split('_')[1])
-        )
-        if checkpoints:
-            return torch.load(str(checkpoints[-1]), map_location=device)
-        return None
 
 
 if __name__ == '__main__':

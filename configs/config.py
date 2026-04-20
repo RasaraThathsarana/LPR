@@ -13,11 +13,16 @@ BASE_CONFIG = {
     'num_classes': 150,
     'data_root': 'data/ade/ADEChallengeData2016',
     'crop_size': (512, 512),
+    'data_preprocessor': {
+        'mean': [123.675, 116.28, 103.53],
+        'std': [58.395, 57.12, 57.375],
+        'to_rgb': False,
+    },
     
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
         'max_iters': 100000,
-        'val_interval': 10000,  # Validate every 16k iterations
+        'val_interval': 2527,
     },
     
     # Data loading
@@ -26,9 +31,7 @@ BASE_CONFIG = {
     
     # Logging
     'log_interval': 50,
-    'num_epochs': 160,  # Roughly 160k / (20k samples / batch_size)
-    'val_interval': 1,  # Validate every epoch
-    
+
     # Optimizer (default)
     'optimizer': {
         'type': 'SGD',
@@ -39,8 +42,11 @@ BASE_CONFIG = {
     
     'scheduler': {
         'type': 'poly',
-        'power': 0.9,
-        'eta_min': 1e-4,
+        'warmup': 'linear',
+        'warmup_iters': 1500,
+        'warmup_ratio': 1e-6,
+        'power': 1.0,
+        'eta_min': 0.0,
     },
 }
 
@@ -53,9 +59,10 @@ SWIN_TINY_CONFIG = {
         'encoder': 'swin_tiny',
         'decoder': 'upernet',
         'adapter': None,
+        'use_auxiliary_decoder': True,
         'name': 'swin_tiny',
         'pretrained': True,
-        'pretrain_path': None,  # Will auto-download from MMSeg
+        'pretrain_path': None,  # Will auto-download official ImageNet-22K Swin weights
         'encoder_kwargs': {
             'embed_dims': 96,
             'depths': [2, 2, 6, 2],
@@ -70,6 +77,15 @@ SWIN_TINY_CONFIG = {
             'in_channels': [96, 192, 384, 768],
             'channels': 512,
             'dropout_ratio': 0.1,
+        },
+        'auxiliary_kwargs': {
+            'in_channels': 384,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
         },
     },
     'optimizer': {
@@ -89,6 +105,7 @@ SWIN_SMALL_CONFIG = {
         'encoder': 'swin_small',
         'decoder': 'upernet',
         'adapter': None,
+        'use_auxiliary_decoder': True,
         'name': 'swin_small',
         'pretrained': True,
         'pretrain_path': None,
@@ -106,6 +123,15 @@ SWIN_SMALL_CONFIG = {
             'in_channels': [96, 192, 384, 768],
             'channels': 512,
             'dropout_ratio': 0.1,
+        },
+        'auxiliary_kwargs': {
+            'in_channels': 384,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
         },
     },
     'optimizer': {
@@ -125,6 +151,7 @@ SWIN_BASE_CONFIG = {
         'encoder': 'swin_base',
         'decoder': 'upernet',
         'adapter': None,
+        'use_auxiliary_decoder': False,
         'name': 'swin_base',
         'pretrained': True,
         'pretrain_path': None,
@@ -136,12 +163,21 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': True,  # Enabled to save memory
+            'use_checkpoint': True,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
             'channels': 512,
             'dropout_ratio': 0.1,
+        },
+        'auxiliary_kwargs': {
+            'in_channels': 512,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
         },
     },
     'optimizer': {
@@ -161,6 +197,7 @@ SWIN_LARGE_CONFIG = {
         'encoder': 'swin_large',
         'decoder': 'upernet',
         'adapter': None,
+        'use_auxiliary_decoder': True,
         'name': 'swin_large',
         'pretrained': True,
         'pretrain_path': None,
@@ -172,12 +209,21 @@ SWIN_LARGE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': True,  # Enabled to save memory
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [192, 384, 768, 1536],
             'channels': 512,
             'dropout_ratio': 0.1,
+        },
+        'auxiliary_kwargs': {
+            'in_channels': 768,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
         },
     },
     'optimizer': {
@@ -203,26 +249,26 @@ MODEL_DETAILS = {
     'swin_tiny': {
         'embed_dims': 96,
         'depths': [2, 2, 6, 2],
-        'params': '29M',
-        'flops': '39G',
+        'params': '60M',
+        'flops': '945G',
     },
     'swin_small': {
         'embed_dims': 96,
         'depths': [2, 2, 18, 2],
-        'params': '50M',
-        'flops': '83G',
+        'params': '81M',
+        'flops': '1038G',
     },
     'swin_base': {
         'embed_dims': 128,
         'depths': [2, 2, 18, 2],
-        'params': '88M',
-        'flops': '140G',
+        'params': '121M',
+        'flops': '1841G',
     },
     'swin_large': {
         'embed_dims': 192,
         'depths': [2, 2, 18, 2],
-        'params': '197M',
-        'flops': '282G',
+        'params': '234M',
+        'flops': '3230G',
     },
 }
 
@@ -244,8 +290,13 @@ def print_config(config_name: str):
     print(f"Max iterations: {config['train_cfg']['max_iters']}")
     print(f"Validation interval: {config['train_cfg']['val_interval']} iters")
     print(f"\nModel architecture:")
-    for key, val in config['model']['backbone'].items():
-        print(f"  {key}: {val}")
+    print(f"  encoder: {config['model']['encoder']}")
+    print(f"  aux_decoder_enabled: {config['model'].get('use_auxiliary_decoder', True)}")
+    for key, val in config['model'].get('encoder_kwargs', {}).items():
+        print(f"  encoder.{key}: {val}")
+    print(f"  decoder: {config['model']['decoder']}")
+    for key, val in config['model'].get('decoder_kwargs', {}).items():
+        print(f"  decoder.{key}: {val}")
     print(f"\nModel params: {details.get('params', 'N/A')}")
     print(f"Model FLOPs: {details.get('flops', 'N/A')}")
     print(f"{'='*60}\n")

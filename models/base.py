@@ -48,14 +48,29 @@ class Adapter(nn.Module):
 class EncoderDecoderModel(SegmentationModel):
     """Encoder-decoder segmentation model with optional adapter."""
 
-    def __init__(self, encoder: Encoder, decoder: Decoder, adapter: Optional[Adapter] = None):
+    def __init__(
+        self,
+        encoder: Encoder,
+        decoder: Decoder,
+        adapter: Optional[Adapter] = None,
+        aux_head: Optional[nn.Module] = None,
+        input_norm_cfg: Optional[Dict] = None,
+    ):
         super().__init__()
         self.encoder = encoder
         self.adapter = adapter
         self.decoder = decoder
+        self.aux_head = aux_head
+        self.input_norm_cfg = input_norm_cfg
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_aux: bool = False):
         features = self.encoder(x)
         if self.adapter is not None:
             features = self.adapter(features)
-        return self.decoder(features)
+        
+        out = self.decoder(features)
+        if return_aux and self.aux_head is not None:
+            return out, self.aux_head(features)
+        elif return_aux:
+            return out, None
+        return out

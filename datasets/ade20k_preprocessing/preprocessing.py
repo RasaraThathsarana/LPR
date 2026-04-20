@@ -20,29 +20,6 @@ class Compose:
         return data
 
 
-class LoadImageFromFile:
-    """Load image from file (already done in dataset, but keeping for compatibility)."""
-    
-    def __call__(self, data: Dict) -> Dict:
-        # Image is already loaded by dataset
-        return data
-
-
-class LoadAnnotations:
-    """Load annotation from file (already done in dataset, but keeping for compatibility).
-    
-    Args:
-        reduce_zero_label (bool): Whether to reduce zero label. Default: False
-    """
-    
-    def __init__(self, reduce_zero_label: bool = False):
-        self.reduce_zero_label = reduce_zero_label
-    
-    def __call__(self, data: Dict) -> Dict:
-        # Segmentation map is already loaded by dataset
-        return data
-
-
 class RandomResize:
     """Randomly resize the image and segmentation map.
     
@@ -352,10 +329,8 @@ def build_pipeline(pipeline_config: List[Dict]) -> Compose:
         cfg = cfg.copy()
         transform_type = cfg.pop('type')
         
-        if transform_type == 'LoadImageFromFile':
-            transforms.append(LoadImageFromFile())
-        elif transform_type == 'LoadAnnotations':
-            transforms.append(LoadAnnotations(**cfg))
+        if transform_type in {'LoadImageFromFile', 'LoadAnnotations'}:
+            continue
         elif transform_type == 'RandomResize':
             transforms.append(RandomResize(**cfg))
         elif transform_type == 'Resize':

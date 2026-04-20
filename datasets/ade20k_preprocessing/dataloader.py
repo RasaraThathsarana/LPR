@@ -67,7 +67,6 @@ class ADE20KDataLoader:
             # Load and preprocess samples
             batch_imgs = []
             batch_segs = []
-            batch_metas = []
             
             for idx in batch_indices:
                 sample = self.dataset[idx]
@@ -75,17 +74,12 @@ class ADE20KDataLoader:
                 
                 batch_imgs.append(processed['img'])
                 batch_segs.append(processed['gt_semantic_seg'])
-                batch_metas.append({
-                    'img_path': sample['img_path'],
-                    'seg_map_path': sample['seg_map_path'],
-                })
             
             # Stack to create batch
             # Note: All images in batch assumed to have same shape
             batch_data = {
                 'img': torch.from_numpy(np.stack(batch_imgs, axis=0)).float(),  # (B, C, H, W)
                 'gt_semantic_seg': torch.from_numpy(np.stack(batch_segs, axis=0)).long(),  # (B, H, W)
-                'img_metas': batch_metas,
             }
             
             yield batch_data
@@ -172,7 +166,6 @@ if __name__ == '__main__':
     for batch_data in train_loader:
         print(f"Batch images shape: {batch_data['img'].shape}")
         print(f"Batch masks shape: {batch_data['gt_semantic_seg'].shape}")
-        print(f"Batch metadata: {batch_data['img_metas'][0].keys()}")
         break  # Only show first batch
     
     print("\n" + "=" * 60)

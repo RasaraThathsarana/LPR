@@ -7,8 +7,6 @@ A standalone preprocessing module that replicates MMSegmentation's ADE20K prepro
 from .ade20k_dataset import ADE20KDataset
 from .preprocessing import (
     Compose,
-    LoadImageFromFile,
-    LoadAnnotations,
     RandomResize,
     Resize,
     RandomCrop,
@@ -24,8 +22,6 @@ from .download import ensure_ade20k_dataset
 __all__ = [
     'ADE20KDataset',
     'Compose',
-    'LoadImageFromFile',
-    'LoadAnnotations',
     'RandomResize',
     'Resize',
     'RandomCrop',

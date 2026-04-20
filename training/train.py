@@ -7,6 +7,8 @@ while using the standalone ADE20K preprocessing module.
 
 import argparse
 import torch
+import random
+import os
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
@@ -14,11 +16,11 @@ import numpy as np
 import cv2
 from pathlib import Path
 from tqdm import tqdm
-from typing import Dict, Tuple
+from typing import Dict
 import json
-import time
 
 from models import build_model
+from models.model import translate_checkpoint_state_dict
 from configs import CONFIG
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 
@@ -54,6 +56,8 @@ class Trainer:
         
         # Setup loss function
         self.criterion = nn.CrossEntropyLoss(ignore_index=255)
+        self.aux_criterion = nn.CrossEntropyLoss(ignore_index=255)
+        self.aux_loss_weight = self.config.get('auxiliary_loss_weight', 0.4)
         
         # Setup tensorboard
         self.writer = SummaryWriter(str(self.log_dir))
@@ -78,8 +82,23 @@ class Trainer:
                 weight_decay=opt_cfg.get('weight_decay', 0.0005)
             )
         elif opt_cfg['type'] == 'AdamW':
+            no_decay_terms = ('absolute_pos_embed', 'relative_position_bias_table', 'norm')
+            decay_params = []
+            no_decay_params = []
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if any(term in name for term in no_decay_terms):
+                    no_decay_params.append(param)
+                else:
+                    decay_params.append(param)
+
+            param_groups = [
+                {'params': decay_params, 'weight_decay': opt_cfg.get('weight_decay', 0.01)},
+                {'params': no_decay_params, 'weight_decay': 0.0},
+            ]
             return optim.AdamW(
-                self.model.parameters(),
+                param_groups,
                 lr=opt_cfg['lr'],
                 betas=opt_cfg.get('betas', (0.9, 0.999)),
                 weight_decay=opt_cfg.get('weight_decay', 0.01)
@@ -89,83 +108,48 @@ class Trainer:
     
     def _build_scheduler(self):
         """Build learning rate scheduler from config."""
-        # Simple polynomial decay scheduler (matches MMSegmentation)
         total_iters = self.config['train_cfg']['max_iters']
+        sched_cfg = self.config.get('scheduler', {})
         
-        class PolyLR:
-            def __init__(self, optimizer, total_iters, power=0.9, eta_min=1e-4):
+        class WarmupPolyLR:
+            def __init__(
+                self,
+                optimizer,
+                total_iters,
+                warmup_iters=1500,
+                warmup_ratio=1e-6,
+                power=1.0,
+                eta_min=0.0,
+            ):
                 self.optimizer = optimizer
                 self.total_iters = total_iters
+                self.warmup_iters = warmup_iters
+                self.warmup_ratio = warmup_ratio
                 self.power = power
                 self.eta_min = eta_min
                 self.base_lr = optimizer.defaults['lr']
             
             def step(self, current_iter):
-                lr = self.eta_min + (self.base_lr - self.eta_min) * (
-                    (1 - current_iter / self.total_iters) ** self.power
-                )
+                current_iter = min(current_iter, self.total_iters)
+                if self.warmup_iters > 0 and current_iter < self.warmup_iters:
+                    alpha = current_iter / max(1, self.warmup_iters)
+                    factor = self.warmup_ratio + (1.0 - self.warmup_ratio) * alpha
+                    lr = self.base_lr * factor
+                else:
+                    progress = (current_iter - self.warmup_iters) / max(1, self.total_iters - self.warmup_iters)
+                    progress = min(max(progress, 0.0), 1.0)
+                    lr = self.eta_min + (self.base_lr - self.eta_min) * ((1 - progress) ** self.power)
                 for param_group in self.optimizer.param_groups:
                     param_group['lr'] = lr
         
-        return PolyLR(
+        return WarmupPolyLR(
             self.optimizer,
             total_iters,
-            power=self.config['scheduler'].get('power', 0.9),
-            eta_min=self.config['scheduler'].get('eta_min', 1e-4)
+            warmup_iters=sched_cfg.get('warmup_iters', 1500),
+            warmup_ratio=sched_cfg.get('warmup_ratio', 1e-6),
+            power=sched_cfg.get('power', 1.0),
+            eta_min=sched_cfg.get('eta_min', 0.0)
         )
-    
-    def train_epoch(self):
-        """Train for one epoch."""
-        self.model.train()
-        
-        total_loss = 0.0
-        num_batches = 0
-        
-        with tqdm(self.train_loader, desc=f'Epoch {self.current_epoch}') as pbar:
-            for batch_data in pbar:
-                imgs = batch_data['img'].to(self.device)  # (B, 3, H, W)
-                segs = batch_data['gt_semantic_seg'].to(self.device)  # (B, H, W)
-                
-                # Forward pass with mixed precision
-                with torch.amp.autocast('cuda'):
-                    outputs = self.model(imgs)  # (B, num_classes, H, W)
-                    # Compute loss
-                    loss = self.criterion(outputs, segs)
-                
-                # Backward pass
-                self.optimizer.zero_grad()
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                
-                # Update scheduler
-                self.scheduler.step(self.current_iter)
-                
-                # Update metrics
-                total_loss += loss.item()
-                num_batches += 1
-                self.current_iter += 1
-                
-                # Log
-                pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
-                
-                # Log to tensorboard every log_interval
-                if self.current_iter % self.config['log_interval'] == 0:
-                    self.writer.add_scalar(
-                        'train/loss',
-                        loss.item(),
-                        self.current_iter
-                    )
-                    self.writer.add_scalar(
-                        'train/lr',
-                        self.optimizer.param_groups[0]['lr'],
-                        self.current_iter
-                    )
-        
-        avg_loss = total_loss / num_batches
-        return avg_loss
     
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
@@ -286,26 +270,7 @@ class Trainer:
         """Load checkpoint."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
-        
-        new_state_dict = {}
-        for k, v in state_dict.items():
-            if k.startswith('auxiliary_head'): continue
-            if k.startswith('backbone.'):
-                k = k.replace('backbone.', 'encoder.')
-                k = k.replace('.stages.', '.layers.')
-                k = k.replace('.attn.w_msa.', '.attn.')
-                k = k.replace('patch_embed.projection.', 'patch_embed.proj.')
-                k = k.replace('.ffn.layers.0.0.', '.mlp.fc1.')
-                k = k.replace('.ffn.layers.1.', '.mlp.fc2.')
-            elif k.startswith('decode_head.'):
-                k = k.replace('decode_head.', 'decoder.')
-                k = k.replace('conv_seg.', 'cls_seg.')
-                if 'psp_modules' in k:
-                    k = k.replace('.1.conv.', '.1.').replace('.1.bn.', '.2.')
-                elif any(x in k for x in ['bottleneck', 'lateral_convs', 'fpn_convs', 'fpn_bottleneck']):
-                    k = k.replace('.conv.', '.0.').replace('.bn.', '.1.')
-            new_state_dict[k] = v
-            
+        new_state_dict = translate_checkpoint_state_dict(state_dict)
         self.model.load_state_dict(new_state_dict, strict=False)
         
         if 'optimizer' in checkpoint:
@@ -346,9 +311,12 @@ class Trainer:
                     segs = batch_data['gt_semantic_seg'].to(self.device)
                     
                     # Forward pass with mixed precision
-                    with torch.amp.autocast('cuda'):
-                        outputs = self.model(imgs)
+                    autocast_device = 'cuda' if str(self.device).startswith('cuda') else 'cpu'
+                    with torch.amp.autocast(autocast_device):
+                        outputs, aux_outputs = self.model(imgs, return_aux=True)
                         loss = self.criterion(outputs, segs)
+                        if aux_outputs is not None:
+                            loss = loss + self.aux_loss_weight * self.aux_criterion(aux_outputs, segs)
                     
                     # Backward pass
                     self.optimizer.zero_grad()
@@ -415,6 +383,27 @@ class Trainer:
         print("Training completed!")
         self.writer.close()
 
+def set_random_seed(seed: int, deterministic: bool = False):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+        torch.use_deterministic_algorithms(True, warn_only=True)
+
+
+def worker_init_fn(worker_id):
+    """Worker init function to ensure reproducible augmentations in DataLoader."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 
 def train(args):
     """Main training function."""
@@ -422,6 +411,10 @@ def train(args):
     # Device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
+    
+    if args.seed is not None:
+        print(f"Setting random seed to {args.seed} (deterministic: {args.deterministic})")
+        set_random_seed(args.seed, args.deterministic)
     
     # Load configuration
     config = CONFIG[args.config]
@@ -453,6 +446,15 @@ def train(args):
     
     print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
     
+    if args.seed is not None:
+        # Ensure reproducibility in multiprocessing workers
+        train_loader.worker_init_fn = worker_init_fn
+        val_loader.worker_init_fn = worker_init_fn
+        g = torch.Generator()
+        g.manual_seed(args.seed)
+        train_loader.generator = g
+        val_loader.generator = g
+    
     # Build model
     print("Building model...")
     model = build_model(
@@ -463,6 +465,9 @@ def train(args):
         encoder_kwargs=config['model'].get('encoder_kwargs', {}),
         adapter_kwargs=config['model'].get('adapter_kwargs', {}),
         decoder_kwargs=config['model'].get('decoder_kwargs', {}),
+        use_auxiliary_decoder=config['model'].get('use_auxiliary_decoder', True),
+        auxiliary_kwargs=config['model'].get('auxiliary_kwargs', {}),
+        input_norm_cfg=config.get('data_preprocessor', {}),
         pretrained=config['model'].get('pretrained', False),
         pretrain_path=config['model'].get('pretrain_path', None),
     )
@@ -508,6 +513,10 @@ if __name__ == '__main__':
                        help='Optional decoder module to override config')
     parser.add_argument('--adapter', type=str, default=None,
                        help='Optional adapter module name to insert between encoder and decoder')
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Random seed for reproducibility')
+    parser.add_argument('--deterministic', action='store_true',
+                       help='Whether to set deterministic options for CUDNN backend')
     
     args = parser.parse_args()
     
