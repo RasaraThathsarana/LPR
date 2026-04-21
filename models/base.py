@@ -70,7 +70,11 @@ class EncoderDecoderModel(SegmentationModel):
         
         out = self.decoder(features)
         if return_aux and self.aux_head is not None:
-            return out, self.aux_head(features)
+            aux_out = self.aux_head(features)
+            # Ensure auxiliary output matches input spatial dimensions
+            if aux_out.shape[2:] != x.shape[2:]:
+                aux_out = torch.nn.functional.interpolate(aux_out, size=x.shape[2:], mode='bilinear', align_corners=False)
+            return out, aux_out
         elif return_aux:
             return out, None
         return out

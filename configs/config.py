@@ -151,7 +151,7 @@ SWIN_BASE_CONFIG = {
         'encoder': 'swin_base',
         'decoder': 'upernet',
         'adapter': None,
-        'use_auxiliary_decoder': True,
+        'use_auxiliary_decoder': False,
         'name': 'swin_base',
         'pretrained': True,
         'pretrain_path': None,

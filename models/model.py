@@ -6,6 +6,7 @@ from typing import Optional
 
 from .base import EncoderDecoderModel, SegmentationModel
 from .adapters import build_adapter
+from .aux_decoders import build_auxiliary_head
 
 SWIN_URLS = {
     'swin_tiny': 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth',
@@ -118,10 +119,13 @@ def build_model(
         adapter = build_adapter(adapter_name, **adapter_kwargs)
     decoder = decoder_module.build_decoder(**decoder_kwargs, num_classes=num_classes)
     aux_head = None
-    if use_auxiliary_decoder and hasattr(decoder_module, 'build_auxiliary_head'):
-        aux_config = {'num_classes': num_classes}
-        aux_config.update(auxiliary_kwargs)
-        aux_head = decoder_module.build_auxiliary_head(**aux_config)
+    if use_auxiliary_decoder:
+        try:
+            aux_config = {'num_classes': num_classes}
+            aux_config.update(auxiliary_kwargs)
+            aux_head = build_auxiliary_head(decoder_name, **aux_config)
+        except (ValueError, AttributeError) as e:
+            print(f"Notice: Auxiliary decoder disabled. ({e})")
 
     # Print Model Assembly Summary
     enc_total, enc_train = _count_parameters(encoder)
