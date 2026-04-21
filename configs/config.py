@@ -21,7 +21,7 @@ BASE_CONFIG = {
     
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
-        'max_iters': 100000,
+        'max_iters': 50000,
         'val_interval': 2527,
     },
     
@@ -260,8 +260,6 @@ SWIN_BASE_LPR_CONFIG = {
                 'use_checkpoint': True,
             }
         },
-        'use_auxiliary_decoder': False,
-        'auxiliary_kwargs': {},
     },
 }
 
