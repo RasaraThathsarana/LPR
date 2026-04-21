@@ -119,11 +119,13 @@ def build_model(
         adapter = build_adapter(adapter_name, **adapter_kwargs)
     decoder = decoder_module.build_decoder(**decoder_kwargs, num_classes=num_classes)
     aux_head = None
+    aux_type = decoder_name
     if use_auxiliary_decoder:
         try:
             aux_config = {'num_classes': num_classes}
             aux_config.update(auxiliary_kwargs)
-            aux_head = build_auxiliary_head(decoder_name, **aux_config)
+            aux_type = aux_config.pop('type', decoder_name)
+            aux_head = build_auxiliary_head(aux_type, **aux_config)
         except (ValueError, AttributeError) as e:
             print(f"Notice: Auxiliary decoder disabled. ({e})")
 
@@ -149,7 +151,7 @@ def build_model(
     else:
         print("Adapter           : disabled")
     if aux_head:
-        print(f"Aux decoder       : {decoder_name}")
+        print(f"Aux decoder       : {aux_type}")
         print(f"  params          : {_format_params(aux_total)} total | {_format_params(aux_train)} trainable")
     else:
         print("Aux decoder       : disabled")

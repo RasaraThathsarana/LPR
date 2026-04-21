@@ -260,6 +260,10 @@ SWIN_BASE_LPR_CONFIG = {
                 'use_checkpoint': True,
             }
         },
+        'auxiliary_kwargs': {
+            **SWIN_BASE_CONFIG['model']['auxiliary_kwargs'],
+            'type': 'upernet',
+        },
     },
 }
 
@@ -327,6 +331,13 @@ def print_config(config_name: str):
     print(f"  decoder: {config['model']['decoder']}")
     for key, val in config['model'].get('decoder_kwargs', {}).items():
         print(f"  decoder.{key}: {val}")
+    if config['model'].get('adapter'):
+        print(f"  adapter: {config['model']['adapter']}")
+        for key, val in config['model'].get('adapter_kwargs', {}).items():
+            print(f"  adapter.{key}: {val}")
+    if config['model'].get('use_auxiliary_decoder', True):
+        for key, val in config['model'].get('auxiliary_kwargs', {}).items():
+            print(f"  auxiliary.{key}: {val}")
     print(f"\nModel params: {details.get('params', 'N/A')}")
     print(f"Model FLOPs: {details.get('flops', 'N/A')}")
     print(f"{'='*60}\n")
