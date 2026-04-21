@@ -259,7 +259,7 @@ class Trainer:
             'scaler': self.scaler.state_dict(),
         }
         
-        path = self.checkpoint_dir / f'iter_{self.current_iter}.pth'
+        path = self.checkpoint_dir / 'last_model.pth'
         torch.save(checkpoint, str(path))
         
         if is_best:

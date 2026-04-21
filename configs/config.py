@@ -146,12 +146,12 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 8,  # Might need to reduce batch size for base model
+    'batch_size': 8,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
         'adapter': None,
-        'use_auxiliary_decoder': False,
+        'use_auxiliary_decoder': True,
         'name': 'swin_base',
         'pretrained': True,
         'pretrain_path': None,
