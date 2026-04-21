@@ -54,7 +54,7 @@ BASE_CONFIG = {
 # Swin Tiny configuration
 SWIN_TINY_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 4,  # 2 per GPU * 4 GPUs (adjust based on your setup)
+    'batch_size': 2,  # 2 per GPU * 4 GPUs (adjust based on your setup)
     'model': {
         'encoder': 'swin_tiny',
         'decoder': 'upernet',
