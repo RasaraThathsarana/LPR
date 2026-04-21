@@ -262,7 +262,8 @@ SWIN_BASE_LPR_CONFIG = {
         },
         'auxiliary_kwargs': {
             **SWIN_BASE_CONFIG['model']['auxiliary_kwargs'],
-            'type': 'upernet',
+            'type': 'channorm_upernet',
+            'num_groups': 8,
         },
     },
 }
