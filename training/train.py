@@ -495,7 +495,7 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train Swin UPerNet on ADE20K')
     parser.add_argument('--config', type=str, default='swin_tiny',
-                       choices=['swin_tiny', 'swin_small', 'swin_base', 'swin_large'],
+                       choices=list(CONFIG.keys()),
                        help='Model configuration')
     parser.add_argument('--data-root', type=str, default='data/ade/ADEChallengeData2016',
                        help='Path to ADE20K dataset')
