@@ -23,14 +23,8 @@ class LPRAdapter(nn.Module):
         return self.channel_reducer(concat_features)
 
     def forward(self, features):
-        img = features[0]
-        
-        # Robustly extract the 4 main backbone feature maps. (SMP usually outputs 6 tensors for swin base)
-        if len(features) >= 6:
-            f1, f2, f3, f4 = features[-4:]
-        else:
-            # Fallback if there's a different configuration
-            f1, f2, f3, f4 = features[1], features[2], features[3], features[4]
+        # Extract the 4 main backbone feature maps
+        f1, f2, f3, f4 = features[-4:]
         
         # Checkpoint the interpolation and concat block to save VRAM 
         if self.use_checkpoint and any(f.requires_grad for f in [f1, f2, f3, f4]):
@@ -38,4 +32,4 @@ class LPRAdapter(nn.Module):
         else:
             reduced_features = self._forward_impl(f1, f2, f3, f4)
         
-        return img, reduced_features
+        return [reduced_features]

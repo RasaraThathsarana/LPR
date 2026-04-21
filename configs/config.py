@@ -235,12 +235,42 @@ SWIN_LARGE_CONFIG = {
 }
 
 
+# Swin Base with Adapter and LPR Decoder configuration
+SWIN_BASE_LPR_CONFIG = {
+    **SWIN_BASE_CONFIG,
+    'model': {
+        **SWIN_BASE_CONFIG['model'],
+        'adapter': 'swinb_lpr_adapter',
+        'adapter_kwargs': {
+            'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
+            'out_channels': 512,
+            'use_checkpoint': True,
+        },
+        'decoder': 'lpr',
+        'decoder_kwargs': {
+            # The adapter reduces the 4 feature maps into a single 512-channel tensor
+            'in_channels': [512],
+            'lpr_kwargs': {
+                'in_channels': 3,       # Image channels for the internal UNet
+                'patch_size': 16,
+                'hidden_dim': 256,
+                'cnn_dim': 32,
+                'use_checkpoint': True,
+            }
+        },
+        'use_auxiliary_decoder': False,
+        'auxiliary_kwargs': {},
+    },
+}
+
+
 # Configuration dictionary for easy access
 CONFIG = {
     'swin_tiny': SWIN_TINY_CONFIG,
     'swin_small': SWIN_SMALL_CONFIG,
     'swin_base': SWIN_BASE_CONFIG,
     'swin_large': SWIN_LARGE_CONFIG,
+    'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
 }
 
 

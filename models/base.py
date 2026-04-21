@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import inspect
 from typing import Dict, List, Any, Optional
 
 
@@ -62,13 +63,20 @@ class EncoderDecoderModel(SegmentationModel):
         self.decoder = decoder
         self.aux_head = aux_head
         self.input_norm_cfg = input_norm_cfg
+        
+        # Check if the decoder requires the original image tensor
+        sig = inspect.signature(self.decoder.forward)
+        self.pass_img_to_decoder = 'img' in sig.parameters
 
     def forward(self, x: torch.Tensor, return_aux: bool = False):
         features = self.encoder(x)
         if self.adapter is not None:
             features = self.adapter(features)
         
-        out = self.decoder(features)
+        if self.pass_img_to_decoder:
+            out = self.decoder(features, img=x)
+        else:
+            out = self.decoder(features)
         if return_aux and self.aux_head is not None:
             aux_out = self.aux_head(features)
             # Ensure auxiliary output matches input spatial dimensions
