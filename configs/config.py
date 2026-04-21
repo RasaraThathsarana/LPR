@@ -243,13 +243,13 @@ SWIN_BASE_LPR_CONFIG = {
         'adapter': 'swinb_lpr_adapter',
         'adapter_kwargs': {
             'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
-            'out_channels': 512,
+            'out_channels': 256,
             'use_checkpoint': True,
         },
         'decoder': 'lpr',
         'decoder_kwargs': {
             # The adapter reduces the 4 feature maps into a single 512-channel tensor
-            'in_channels': [512],
+            'in_channels': [256],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'patch_size': 16,
