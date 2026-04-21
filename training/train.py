@@ -289,17 +289,18 @@ class Trainer:
         max_iters = self.config['train_cfg']['max_iters']
         val_interval_iters = self.config['train_cfg']['val_interval']
         num_classes = self.config['num_classes']
+        accumulation_steps = self.config.get('accumulation_steps', 1)
         
         print(f"Starting training for {max_iters} iterations (validating every {val_interval_iters} iterations)...")
         
         train_hist = np.zeros((num_classes, num_classes))
         
+        self.model.train()
+        self.optimizer.zero_grad()
+        forward_passes = 0
+        
         while self.current_iter < max_iters:
             self.current_epoch += 1
-            self.model.train()
-            
-            total_loss = 0.0
-            num_batches = 0
             
             with tqdm(self.train_loader, desc=f'Epoch {self.current_epoch}') as pbar:
                 for batch_data in pbar:
@@ -317,68 +318,73 @@ class Trainer:
                         loss = self.criterion(outputs, segs)
                         if aux_outputs is not None:
                             loss = loss + self.aux_loss_weight * self.aux_criterion(aux_outputs, segs)
+                        
+                        # Scale loss for gradient accumulation
+                        accum_loss = loss / accumulation_steps
                     
-                    # Backward pass
-                    self.optimizer.zero_grad()
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    
-                    # Update scheduler
-                    self.scheduler.step(self.current_iter)
+                    # Backward pass (accumulates gradients)
+                    self.scaler.scale(accum_loss).backward()
                     
                     # Update metrics
-                    total_loss += loss.item()
-                    num_batches += 1
-                    self.current_iter += 1
+                    forward_passes += 1
                     train_hist = self._update_hist(train_hist, outputs.argmax(dim=1), segs)
                     
                     # Log
                     pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
                     
-                    # Log to tensorboard every log_interval
-                    if self.current_iter % self.config['log_interval'] == 0:
-                        self.writer.add_scalar(
-                            'train/loss',
-                            loss.item(),
-                            self.current_iter
-                        )
-                        self.writer.add_scalar(
-                            'train/lr',
-                            self.optimizer.param_groups[0]['lr'],
-                            self.current_iter
-                        )
-                    
-                    # Validate at specified iteration intervals
-                    if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
-                        train_metrics = self._compute_miou(train_hist)
-                        print(f"\n[Iter {self.current_iter}] Train mIoU: {train_metrics['mIoU']:.4f}, Train mAcc: {train_metrics['mAcc']:.4f}")
+                    # Perform optimization step when accumulation is reached
+                    if forward_passes % accumulation_steps == 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        self.optimizer.zero_grad()
                         
-                        print(f"[Iter {self.current_iter}] Running validation...")
-                        metrics = self.validate()
-                        print(f"[Iter {self.current_iter}] Val mIoU: {metrics['mIoU']:.4f}, Val mAcc: {metrics['mAcc']:.4f}\n")
+                        # Update scheduler and true iteration count
+                        self.scheduler.step(self.current_iter)
+                        self.current_iter += 1
                         
-                        # Log metrics
-                        self.writer.add_scalar('train/mIoU', train_metrics['mIoU'], self.current_iter)
-                        self.writer.add_scalar('train/mAcc', train_metrics['mAcc'], self.current_iter)
-                        self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
-                        self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
+                        # Log to tensorboard every log_interval
+                        if self.current_iter % self.config['log_interval'] == 0:
+                            self.writer.add_scalar(
+                                'train/loss',
+                                loss.item(),
+                                self.current_iter
+                            )
+                            self.writer.add_scalar(
+                                'train/lr',
+                                self.optimizer.param_groups[0]['lr'],
+                                self.current_iter
+                            )
                         
-                        # Save checkpoint
-                        is_best = metrics['mIoU'] > self.best_miou
-                        if is_best:
-                            self.best_miou = metrics['mIoU']
-                            self.save_checkpoint(is_best=True)
-                        else:
-                            self.save_checkpoint()
-                        
-                        # Reset training histogram after logging
-                        train_hist = np.zeros((num_classes, num_classes))
-                        
-                        # Resume training mode
-                        self.model.train()
+                        # Validate at specified iteration intervals
+                        if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
+                            train_metrics = self._compute_miou(train_hist)
+                            print(f"\n[Iter {self.current_iter}] Train mIoU: {train_metrics['mIoU']:.4f}, Train mAcc: {train_metrics['mAcc']:.4f}")
+                            
+                            print(f"[Iter {self.current_iter}] Running validation...")
+                            metrics = self.validate()
+                            print(f"[Iter {self.current_iter}] Val mIoU: {metrics['mIoU']:.4f}, Val mAcc: {metrics['mAcc']:.4f}\n")
+                            
+                            # Log metrics
+                            self.writer.add_scalar('train/mIoU', train_metrics['mIoU'], self.current_iter)
+                            self.writer.add_scalar('train/mAcc', train_metrics['mAcc'], self.current_iter)
+                            self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
+                            self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
+                            
+                            # Save checkpoint
+                            is_best = metrics['mIoU'] > self.best_miou
+                            if is_best:
+                                self.best_miou = metrics['mIoU']
+                                self.save_checkpoint(is_best=True)
+                            else:
+                                self.save_checkpoint()
+                            
+                            # Reset training histogram after logging
+                            train_hist = np.zeros((num_classes, num_classes))
+                            
+                            # Resume training mode
+                            self.model.train()
         
         print("Training completed!")
         self.writer.close()
