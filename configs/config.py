@@ -256,7 +256,7 @@ SWIN_BASE_LPR_CONFIG = {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'patch_size': 16,
                 'hidden_dim': 256,
-                'cnn_dim': 32,
+                'cnn_dim': 64,
                 'use_checkpoint': True,
             }
         },
