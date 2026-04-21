@@ -248,7 +248,7 @@ class LocalPatchRefiner(nn.Module):
         
         return out
 
-from ....base import Decoder
+from ...base import Decoder
 from typing import List
 
 class LPRDecoder(Decoder):
