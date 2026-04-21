@@ -70,6 +70,7 @@ class EncoderDecoderModel(SegmentationModel):
 
     def forward(self, x: torch.Tensor, return_aux: bool = False):
         features = self.encoder(x)
+        encoder_features = features
         if self.adapter is not None:
             features = self.adapter(features)
         
@@ -78,7 +79,7 @@ class EncoderDecoderModel(SegmentationModel):
         else:
             out = self.decoder(features)
         if return_aux and self.aux_head is not None:
-            aux_out = self.aux_head(features)
+            aux_out = self.aux_head(encoder_features)
             # Ensure auxiliary output matches input spatial dimensions
             if aux_out.shape[2:] != x.shape[2:]:
                 aux_out = torch.nn.functional.interpolate(aux_out, size=x.shape[2:], mode='bilinear', align_corners=False)

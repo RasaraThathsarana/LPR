@@ -182,7 +182,7 @@ class LocalPatchRefiner(nn.Module):
 
     def _attention_block(self, q_normed, k_normed, v_normed):
     # Force fp32 for attention computation to maintain numerical stability
-        with autocast(enabled=False):
+        with torch.amp.autocast('cuda', enabled=False):
 
             q_normed = q_normed.float()
             k_normed = k_normed.float()
