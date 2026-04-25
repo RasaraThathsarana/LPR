@@ -72,16 +72,12 @@ class UNet_FullRes(nn.Module):
         self.bottleneck = BasicBlock(base_channels * 8, base_channels * 16, stride=2, use_checkpoint=use_checkpoint)
         
         # Decoder
-        self.up4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.dec4 = BasicBlock(base_channels * 16 + base_channels * 8, base_channels * 8, use_checkpoint=use_checkpoint)
         
-        self.up3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.dec3 = BasicBlock(base_channels * 8 + base_channels * 4, base_channels * 4, use_checkpoint=use_checkpoint)
         
-        self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.dec2 = BasicBlock(base_channels * 4 + base_channels * 2, base_channels * 4, use_checkpoint=use_checkpoint)
         
-        self.final_up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.final_refine = nn.Sequential(
             nn.Conv2d(base_channels * 4 + base_channels, base_channels * 4, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(8, base_channels * 4),
@@ -105,11 +101,17 @@ class UNet_FullRes(nn.Module):
         s4 = self.enc4(s3)
         b = self.bottleneck(s4)
         
-        d4 = self.dec4(torch.cat([self.up4(b), s4], dim=1))
-        d3 = self.dec3(torch.cat([self.up3(d4), s3], dim=1))
-        d2 = self.dec2(torch.cat([self.up2(d3), s2], dim=1))
+        up4 = F.interpolate(b, size=s4.shape[2:], mode='bilinear', align_corners=True)
+        d4 = self.dec4(torch.cat([up4, s4], dim=1))
         
-        out = self.final_refine(torch.cat([self.final_up(d2), s1], dim=1))
+        up3 = F.interpolate(d4, size=s3.shape[2:], mode='bilinear', align_corners=True)
+        d3 = self.dec3(torch.cat([up3, s3], dim=1))
+        
+        up2 = F.interpolate(d3, size=s2.shape[2:], mode='bilinear', align_corners=True)
+        d2 = self.dec2(torch.cat([up2, s2], dim=1))
+        
+        final_up = F.interpolate(d2, size=s1.shape[2:], mode='bilinear', align_corners=True)
+        out = self.final_refine(torch.cat([final_up, s1], dim=1))
         
         return out
 
@@ -205,14 +207,20 @@ class LocalPatchRefiner(nn.Module):
         B, C, H, W = img.shape
         P = self.patch_size
         
-        out_feat = self.cnn(img)
-        all_feats = out_feat
+        pad_h = (P - H % P) % P
+        pad_w = (P - W % P) % P
+        if pad_h > 0 or pad_w > 0:
+            img = F.pad(img, (0, pad_w, 0, pad_h), mode='reflect')
+            
+        H_pad, W_pad = img.shape[2:]
+        
+        all_feats = self.cnn(img)
 
-        n_h, n_w = H // P, W // P
+        n_h, n_w = H_pad // P, W_pad // P
 
         # Robust check to ensure global_tokens match spatial dims of img//P
-        # if global_tokens.shape[-2] != n_h or global_tokens.shape[-1] != n_w:
-        #     global_tokens = F.interpolate(global_tokens, size=(n_h, n_w), mode='bilinear', align_corners=False)
+        if global_tokens.shape[-2] != n_h or global_tokens.shape[-1] != n_w:
+            global_tokens = F.interpolate(global_tokens, size=(n_h, n_w), mode='bilinear', align_corners=False)
 
         global_tokens = global_tokens.permute(0, 2, 3, 1) # [B, n_h, n_w, global_dim]
 
@@ -244,7 +252,10 @@ class LocalPatchRefiner(nn.Module):
         fused = self.fusion_conv(fusion_input)
 
         out = fused.view(B, n_h, n_w, self.hidden_dim, P, P)
-        out = out.permute(0, 3, 1, 4, 2, 5).reshape(B, self.hidden_dim, H, W)
+        out = out.permute(0, 3, 1, 4, 2, 5).reshape(B, self.hidden_dim, H_pad, W_pad)
+        
+        if pad_h > 0 or pad_w > 0:
+            out = out[:, :, :H, :W]
         
         return out
 

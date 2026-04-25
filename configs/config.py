@@ -165,7 +165,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': True,
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -194,7 +194,7 @@ SWIN_BASE_CONFIG = {
 # Swin Large configuration
 SWIN_LARGE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 2,  # Reduce batch size for large model
+    'batch_size': 4,  # Reduce batch size for large model
     'model': {
         'encoder': 'swin_large',
         'decoder': 'upernet',
@@ -245,13 +245,13 @@ SWIN_BASE_LPR_CONFIG = {
         'adapter': 'swinb_lpr_adapter',
         'adapter_kwargs': {
             'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
-            'out_channels': 256,
+            'out_channels': 512,
             'use_checkpoint': True,
         },
         'decoder': 'lpr',
         'decoder_kwargs': {
             # The adapter reduces the 4 feature maps into a single 512-channel tensor
-            'in_channels': [256],
+            'in_channels': [512],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'patch_size': 16,
