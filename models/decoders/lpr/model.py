@@ -119,21 +119,24 @@ class LocalPatchRefiner(nn.Module):
 
         self.cnn = UNet_FullRes(in_channels=in_channels, base_channels=cnn_dim, use_checkpoint=use_checkpoint)
 
-        # Dimension calculation for Query: out(cnn_dim*4)
+        # Output channels of the CNN (cnn_dim * 4 + cnn_dim = cnn_dim * 5 = 160)
         combined_dim = cnn_dim * 5
 
         self.channel_meanings = nn.Parameter(torch.randn(hidden_dim, hidden_dim) * 0.02)
-        self.q_norm = nn.LayerNorm(hidden_dim)
+        
+        # Adjust dimensions to match the CNN output directly since we removed query_proj
+        self.q_norm = nn.LayerNorm(combined_dim)
         self.k_norm = nn.LayerNorm(hidden_dim)
         self.v_norm = nn.LayerNorm(global_dim)
 
-        self.q_proj = nn.Linear(hidden_dim, hidden_dim)
+        # q_proj now acts as the projector from the CNN dimension (160) to the hidden_dim (256)
+        self.q_proj = nn.Linear(combined_dim, hidden_dim)
         self.k_proj = nn.Linear(hidden_dim, hidden_dim)
         self.v_proj = nn.Linear(global_dim, hidden_dim)
         self.out_proj = nn.Linear(hidden_dim, hidden_dim)
 
-        # 2D Sine-Cosine Positional Encoding for spatial awareness within the patch
-        pos_embed = self._get_2d_sincos_pos_embed(hidden_dim, patch_size)
+        # Positional encoding must also match the CNN output feature dimension
+        pos_embed = self._get_2d_sincos_pos_embed(combined_dim, patch_size)
         self.register_buffer('pos_embed', pos_embed)
 
     def _get_2d_sincos_pos_embed(self, embed_dim, grid_size):
@@ -164,7 +167,7 @@ class LocalPatchRefiner(nn.Module):
         return torch.cat([emb_sin, emb_cos], dim=1)
 
     def _attention_block(self, q_normed, k_normed, v_normed):
-    # Force fp32 for attention computation to maintain numerical stability
+        # Force fp32 for attention computation to maintain numerical stability
         with torch.amp.autocast('cuda', enabled=False):
 
             q_normed = q_normed.float()
