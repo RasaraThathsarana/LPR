@@ -77,6 +77,12 @@ class UNet_FullRes(nn.Module):
         self.dec3 = BasicBlock(base_channels * 8 + base_channels * 4, base_channels * 4, use_checkpoint=use_checkpoint)
         
         self.dec2 = BasicBlock(base_channels * 4 + base_channels * 2, base_channels * 4, use_checkpoint=use_checkpoint)
+        
+        self.final_refine = nn.Sequential(
+            nn.Conv2d(base_channels * 4 + base_channels, base_channels * 4, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(8, base_channels * 4),
+            nn.ReLU(inplace=True)
+        )
 
         self._init_weights()
 
@@ -120,7 +126,7 @@ class LocalPatchRefiner(nn.Module):
         self.cnn = UNet_FullRes(in_channels=in_channels, base_channels=cnn_dim, use_checkpoint=use_checkpoint)
 
         # Dimension calculation for Query: out(cnn_dim*4)
-        combined_dim = cnn_dim * 4
+        combined_dim = cnn_dim * 5
         
         self.query_proj = nn.Sequential(
             nn.Conv2d(combined_dim, cnn_dim, kernel_size=3, padding=1),
