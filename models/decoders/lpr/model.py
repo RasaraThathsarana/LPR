@@ -16,7 +16,7 @@ class BasicBlock(nn.Module):
 
         # 1×1 reduction
         self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
-        self.bn1 = nn.GroupNorm(8, mid_channels)
+        self.bn1 = nn.BatchNorm2d(mid_channels)
 
         # 3×3 spatial conv
         self.conv2 = nn.Conv2d(
@@ -27,18 +27,18 @@ class BasicBlock(nn.Module):
             padding=1,
             bias=False
         )
-        self.bn2 = nn.GroupNorm(8, mid_channels)
+        self.bn2 = nn.BatchNorm2d(mid_channels)
 
         # 1×1 expansion
         self.conv3 = nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False)
-        self.bn3 = nn.GroupNorm(8, out_channels)
+        self.bn3 = nn.BatchNorm2d(out_channels)
 
         # projection if shape mismatch
         self.proj = None
         if stride != 1 or in_channels != out_channels:
             self.proj = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.GroupNorm(8, out_channels)
+                nn.BatchNorm2d(out_channels)
             )
 
     def _forward_impl(self, x):
@@ -84,7 +84,7 @@ class UNet_FullRes(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+            elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
@@ -124,7 +124,7 @@ class LocalPatchRefiner(nn.Module):
 
         self.channel_meanings = nn.Parameter(torch.randn(hidden_dim, hidden_dim) * 0.02)
         
-        # Adjust dimensions to match the CNN output directly since we removed query_proj
+        # Kept as LayerNorm per your instruction
         self.q_norm = nn.LayerNorm(combined_dim)
         self.k_norm = nn.LayerNorm(hidden_dim)
         self.v_norm = nn.LayerNorm(global_dim)
