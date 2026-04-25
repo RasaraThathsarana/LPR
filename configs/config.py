@@ -165,7 +165,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': False,
+            'use_checkpoint': True,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
