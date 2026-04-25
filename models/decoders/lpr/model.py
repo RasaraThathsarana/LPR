@@ -143,12 +143,6 @@ class LocalPatchRefiner(nn.Module):
         pos_embed = self._get_2d_sincos_pos_embed(hidden_dim, patch_size)
         self.register_buffer('pos_embed', pos_embed)
 
-        self.fusion_conv = nn.Sequential(
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(8, hidden_dim),
-            nn.ReLU(inplace=True)
-        )
-
     def _get_2d_sincos_pos_embed(self, embed_dim, grid_size):
         grid_h = torch.arange(grid_size, dtype=torch.float32)
         grid_w = torch.arange(grid_size, dtype=torch.float32)
@@ -243,9 +237,7 @@ class LocalPatchRefiner(nn.Module):
         # Prepare components for Fusion (only attention features now)
         fusion_input = attn_features.transpose(1, 2).reshape(-1, self.hidden_dim, P, P)
 
-        fused = self.fusion_conv(fusion_input)
-
-        out = fused.view(B, n_h, n_w, self.hidden_dim, P, P)
+        out = fusion_input.view(B, n_h, n_w, self.hidden_dim, P, P)
         out = out.permute(0, 3, 1, 4, 2, 5).reshape(B, self.hidden_dim, H_pad, W_pad)
         
         if pad_h > 0 or pad_w > 0:
