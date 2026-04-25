@@ -121,13 +121,6 @@ class LocalPatchRefiner(nn.Module):
 
         # Dimension calculation for Query: out(cnn_dim*4)
         combined_dim = cnn_dim * 5
-        
-        self.query_proj = nn.Sequential(
-            nn.Conv2d(combined_dim, cnn_dim, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(cnn_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
 
         self.channel_meanings = nn.Parameter(torch.randn(hidden_dim, hidden_dim) * 0.02)
         self.q_norm = nn.LayerNorm(hidden_dim)
@@ -213,13 +206,7 @@ class LocalPatchRefiner(nn.Module):
         global_tokens = global_tokens.permute(0, 2, 3, 1) # [B, n_h, n_w, global_dim]
 
         # Patching for Query construction
-        patches_q = all_feats.unfold(2, P, P).unfold(3, P, P)
-        patches_q = patches_q.permute(0, 2, 3, 1, 4, 5).reshape(-1, all_feats.size(1), P, P)
-
-        if self.use_checkpoint and patches_q.requires_grad:
-            q_map = checkpoint(self.query_proj, patches_q, use_reentrant=False)
-        else:
-            q_map = self.query_proj(patches_q)
+        q_map = all_feats.view(B, all_feats.size(1), n_h, P, n_w, P).permute(0, 2, 4, 1, 3, 5).reshape(-1, all_feats.size(1), P, P)
             
         q_tokens = q_map.flatten(2).transpose(1, 2)
         # Normalize after adding position information so attention sees
