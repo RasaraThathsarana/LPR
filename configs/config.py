@@ -102,7 +102,7 @@ SWIN_TINY_CONFIG = {
 # Swin Small configuration
 SWIN_SMALL_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 8,
+    'batch_size': 6,
     'model': {
         'encoder': 'swin_small',
         'decoder': 'upernet',
