@@ -29,7 +29,7 @@ BASE_CONFIG = {
     'num_workers': 4,
     'pin_memory': True,
     
-    'accumulation_steps': 1,  # Number of batches to accumulate gradients over
+    'accumulation_steps': 4,  # Number of batches to accumulate gradients over
     
     # Logging
     'log_interval': 50,
@@ -148,7 +148,7 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 6,
+    'batch_size': 2,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
@@ -242,21 +242,15 @@ SWIN_BASE_LPR_CONFIG = {
     **SWIN_BASE_CONFIG,
     'model': {
         **SWIN_BASE_CONFIG['model'],
-        'adapter': 'swinb_lpr_adapter',
-        'adapter_kwargs': {
-            'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
-            'out_channels': 384,
-            'use_checkpoint': True,
-        },
+        'adapter': None,
         'decoder': 'lpr',
         'decoder_kwargs': {
-            # The adapter reduces the 4 feature maps into a single 512-channel tensor
-            'in_channels': [384],
+            # Process all multi-stage features directly from Swin Base
+            'in_channels': [128, 256, 512, 1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
-                'patch_size': 16,
-                'hidden_dim': 256,
-                'cnn_dim': 32,
+                'hidden_dim': 128,
+                'cnn_dim': 64,
                 'use_checkpoint': True,
             }
         },
