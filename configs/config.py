@@ -26,7 +26,7 @@ BASE_CONFIG = {
     },
     
     # Data loading
-    'num_workers': 1,
+    'num_workers': 4,
     'pin_memory': True,
     
     'accumulation_steps': 1,  # Number of batches to accumulate gradients over
