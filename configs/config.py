@@ -26,10 +26,10 @@ BASE_CONFIG = {
     },
     
     # Data loading
-    'num_workers': 4,
+    'num_workers': 1,
     'pin_memory': True,
     
-    'accumulation_steps': 4,  # Number of batches to accumulate gradients over
+    'accumulation_steps': 1,  # Number of batches to accumulate gradients over
     
     # Logging
     'log_interval': 50,
@@ -148,7 +148,7 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 2,
+    'batch_size': 6,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
