@@ -23,6 +23,7 @@ import json
 from models import build_model
 from models.model import translate_checkpoint_state_dict
 from configs import CONFIG
+from configs.config import DEFAULT_CONFIG_NAME
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 from datasets.inria_preprocessing.download import ensure_inria_dataset
 
@@ -514,13 +515,13 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train Swin UPerNet on a supported segmentation dataset')
-    parser.add_argument('--config', type=str, default='swin_tiny',
+    parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_NAME,
                        choices=list(CONFIG.keys()),
                        help='Model configuration')
     parser.add_argument('--data-root', type=str, default=None,
                        help='Override dataset root path from config')
     parser.add_argument('--download-data', action='store_true',
-                       help='Download ADE20K dataset automatically if missing')
+                       help='Download and prepare the selected dataset automatically if missing')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                        help='Directory to save checkpoints')
     parser.add_argument('--log-dir', type=str, default='logs',

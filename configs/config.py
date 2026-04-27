@@ -8,6 +8,8 @@ These configurations replicate MMSegmentation's settings for:
 - Swin Large
 """
 
+DEFAULT_CONFIG_NAME = 'inria_swin_tiny'
+
 # Base configuration common to all variants
 BASE_CONFIG = {
     'num_classes': 150,
