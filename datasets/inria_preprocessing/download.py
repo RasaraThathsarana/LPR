@@ -19,6 +19,7 @@ from .inria_dataset import build_tile_coordinates, extract_tile
 INRIA_URLS = [
     'https://project.inria.fr/aerialimagelabeling/files/AerialImageDataset.zip',
     'https://project.inria.fr/aerialimagelabeling/files/NEW2-AerialImageDataset.zip',
+    'https://files.inria.fr/aerialimagelabeling/getAerial.sh'
 ]
 ARCHIVE_NAME = 'AerialImageDataset.zip'
 TILE_SIZE = 224
@@ -206,9 +207,59 @@ def _materialize_expected_layout(raw_root: Path, data_root: Path) -> None:
 
 
 def ensure_inria_dataset(data_root: str, download: bool = False) -> None:
+    return ensure_inria_dataset_from_source(data_root, download=download, archive_path=None)
+
+
+def ensure_inria_dataset_from_source(
+    data_root: str,
+    download: bool = False,
+    archive_path: Optional[str] = None,
+) -> None:
     data_root_path = Path(data_root)
     if _has_inria_dataset(data_root_path):
         return
+
+    if archive_path:
+        archive_input = Path(archive_path)
+        if archive_input.is_dir():
+            if data_root_path.exists():
+                shutil.rmtree(str(data_root_path))
+            _materialize_expected_layout(archive_input, data_root_path)
+            if _has_inria_dataset(data_root_path):
+                print(f'Inria dataset is ready at {data_root_path}')
+                return
+            raise RuntimeError(
+                f'Archive directory provided at {archive_input}, but it did not contain the expected raw Inria layout.'
+            )
+
+        if not archive_input.exists():
+            raise FileNotFoundError(f'Inria archive not found: {archive_input}')
+
+        archive_dir = data_root_path.parent
+        staging_dir = archive_dir / '_inria_extract'
+        raw_extract_dir = staging_dir / 'AerialImageDataset'
+
+        if staging_dir.exists():
+            shutil.rmtree(str(staging_dir))
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            _extract_zip(archive_input, staging_dir)
+            if not raw_extract_dir.exists():
+                raise RuntimeError(f'Expected extracted dataset at {raw_extract_dir}, but it was not found.')
+            if data_root_path.exists():
+                shutil.rmtree(str(data_root_path))
+            _materialize_expected_layout(raw_extract_dir, data_root_path)
+        finally:
+            shutil.rmtree(str(staging_dir), ignore_errors=True)
+
+        if _has_inria_dataset(data_root_path):
+            print(f'Inria dataset is ready at {data_root_path}')
+            return
+        raise RuntimeError(
+            f'Failed to prepare Inria dataset from archive {archive_input}. '
+            'Please verify the archive contains the expected raw layout.'
+        )
 
     if not download:
         raise FileNotFoundError(
