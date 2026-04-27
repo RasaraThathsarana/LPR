@@ -196,7 +196,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': False,
+            'use_checkpoint': True,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -250,6 +250,7 @@ SWIN_LARGE_CONFIG = {
             'dropout_ratio': 0.1,
         },
         'auxiliary_kwargs': {
+            'type': 'channorm_upernet',
             'in_channels': 768,
             'channels': 256,
             'num_convs': 1,
@@ -276,29 +277,30 @@ SWIN_BASE_LPR_CONFIG = {
         'adapter': 'swinb_lpr_adapter',
         'adapter_kwargs': {
             'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
-            'out_channels': 256,
-            'use_checkpoint': False,
+            'out_channels': 1024,
+            'use_checkpoint': True,
         },
         'decoder': 'lpr',
         'decoder_kwargs': {
             # The adapter reduces the 4 feature maps into a single 256-channel tensor
-            'in_channels': [256],
+            'in_channels': [1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'patch_size': 16,
-                'hidden_dim': 256,
+                'hidden_dim': 384,
                 'cnn_dim': 64,
-                'use_checkpoint': False,
+                'use_checkpoint': True,
             },
+        },
         'auxiliary_kwargs': {
-            'in_channels': 768,
+            'type': 'upernet',
+            'in_channels': 512,
             'channels': 256,
             'num_convs': 1,
             'concat_input': False,
             'dropout_ratio': 0.1,
             'in_index': 2,
             'align_corners': False,
-        },
         },
     },
 }
@@ -316,15 +318,20 @@ SWIN_BASE_LPR_HI_CONFIG = {
             'in_channels': [128, 256, 512, 1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
-                'hidden_dim': 256,
+                'hidden_dim': 512,
                 'cnn_dim': 64,
                 'use_checkpoint': True,
             }
         },
         'auxiliary_kwargs': {
-            **SWIN_BASE_CONFIG['model']['auxiliary_kwargs'],
-            'type': 'channorm_upernet',
-            'num_groups': 8,
+            'type': 'upernet',
+            'in_channels': 512,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
         },
     },
 }
