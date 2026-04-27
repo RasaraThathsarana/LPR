@@ -35,7 +35,7 @@ class DownloadProgressBar(tqdm):
         self.update(blocks * block_size - self.n)
 
 
-def _has_inria_dataset(data_root: Path) -> bool:
+def _has_prepared_inria_dataset(data_root: Path) -> bool:
     required_paths = [
         data_root / 'training' / 'images',
         data_root / 'training' / 'gt',
@@ -78,6 +78,18 @@ def _validate_prepared_layout(data_root: Path) -> None:
         )
 
 
+def _is_raw_inria_layout(root: Path) -> bool:
+    train_root = root / 'train'
+    test_root = root / 'test'
+    if not train_root.exists() or not test_root.exists():
+        return False
+    if not (train_root / 'images').exists():
+        return False
+    if (train_root / 'gt').exists() or (root / 'gt').exists() or (train_root / 'annotations').exists():
+        return True
+    return False
+
+
 def _find_raw_inria_root(search_root: Path) -> Optional[Path]:
     """Find the raw Inria folder that contains train/test splits."""
     candidates = [search_root]
@@ -92,13 +104,8 @@ def _find_raw_inria_root(search_root: Path) -> Optional[Path]:
         pass
 
     for candidate in candidates:
-        train_root = candidate / 'train'
-        test_root = candidate / 'test'
-        if train_root.exists() and test_root.exists():
-            if (train_root / 'images').exists() and ((train_root / 'gt').exists() or (candidate / 'gt').exists()):
-                return candidate
-            if (candidate / 'training' / 'images').exists():
-                return candidate
+        if _is_raw_inria_layout(candidate):
+            return candidate
     return None
 
 
@@ -150,6 +157,7 @@ def _has_7z() -> bool:
 
 
 def _ensure_free_space(target_dir: Path, required_bytes: int = MIN_FREE_BYTES) -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(str(target_dir))
     if usage.free < required_bytes:
         raise RuntimeError(
@@ -262,8 +270,14 @@ def _materialize_expected_layout(raw_root: Path, data_root: Path) -> None:
     train_root = raw_root / 'train'
     test_root = raw_root / 'test'
 
-    if not train_root.exists():
+    if not _is_raw_inria_layout(raw_root):
         raise RuntimeError(f'Expected train directory not found in {raw_root}')
+
+    if raw_root.resolve() == data_root.resolve() or raw_root.resolve() in data_root.resolve().parents:
+        raise RuntimeError(
+            'Prepared Inria output root must be different from the raw input root. '
+            f'Raw root: {raw_root}, prepared root: {data_root}'
+        )
 
     _prepare_tiled_split(
         src_images=train_root / 'images',
@@ -307,50 +321,75 @@ def _materialize_expected_layout(raw_root: Path, data_root: Path) -> None:
     _validate_prepared_layout(data_root)
 
 
-def ensure_inria_dataset(data_root: str, download: bool = False) -> None:
-    return ensure_inria_dataset_from_source(data_root, download=download, archive_path=None)
-
-
-def ensure_inria_dataset_from_source(
+def ensure_inria_dataset(
     data_root: str,
+    raw_data_root: Optional[str] = None,
     download: bool = False,
     archive_path: Optional[str] = None,
 ) -> None:
-    data_root_path = Path(data_root)
-    if _has_inria_dataset(data_root_path):
+    prepared_root = Path(data_root)
+    if raw_data_root is None:
+        raw_data_root = str(prepared_root.parent / 'AerialImageDataset')
+    return ensure_inria_dataset_from_source(
+        raw_root=raw_data_root,
+        prepared_root=data_root,
+        download=download,
+        archive_path=archive_path,
+    )
+
+
+def ensure_inria_dataset_from_source(
+    raw_root: str,
+    prepared_root: str,
+    download: bool = False,
+    archive_path: Optional[str] = None,
+) -> None:
+    raw_root_path = Path(raw_root)
+    prepared_root_path = Path(prepared_root)
+
+    if _has_prepared_inria_dataset(prepared_root_path):
         return
 
-    _ensure_free_space(data_root_path.parent)
+    _ensure_free_space(prepared_root_path.parent)
+    raw_source_root: Optional[Path] = None
 
     if archive_path:
         archive_input = Path(archive_path)
         if archive_input.is_dir():
-            if data_root_path.exists():
-                shutil.rmtree(str(data_root_path))
-            _materialize_expected_layout(archive_input, data_root_path)
-            print(f'Inria dataset is ready at {data_root_path}')
+            raw_source_root = _find_raw_inria_root(archive_input)
+            if raw_source_root is None:
+                raise FileNotFoundError(
+                    f'Inria raw dataset not found in {archive_input}. '
+                    'Expected a folder containing train/ and test/ splits.'
+                )
+            if prepared_root_path.exists():
+                shutil.rmtree(str(prepared_root_path))
+            _materialize_expected_layout(raw_source_root, prepared_root_path)
+            print(f'Inria dataset is ready at {prepared_root_path}')
             return
 
         if not archive_input.exists():
             raise FileNotFoundError(f'Inria archive not found: {archive_input}')
 
-        archive_dir = data_root_path.parent
-        staging_dir = archive_dir / '_inria_extract'
+        work_dir = prepared_root_path.parent / '_inria_source'
+        staging_dir = work_dir / '_extract'
         raw_extract_dir = staging_dir / 'AerialImageDataset'
+        prepared_ok = False
 
         if staging_dir.exists():
             shutil.rmtree(str(staging_dir))
+        if work_dir.exists():
+            shutil.rmtree(str(work_dir))
+        work_dir.mkdir(parents=True, exist_ok=True)
         staging_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             if zipfile.is_zipfile(str(archive_input)):
                 _extract_zip(archive_input, staging_dir)
             elif _looks_like_shell_script(archive_input):
-                if data_root_path.exists():
-                    shutil.rmtree(str(data_root_path))
-                script_copy = archive_dir / 'getAerial.sh'
+                script_copy = work_dir / 'getAerial.sh'
                 shutil.copy2(archive_input, script_copy)
-                _run_shell_script(script_copy, archive_dir)
+                _run_shell_script(script_copy, work_dir)
                 script_copy.unlink(missing_ok=True)
             else:
                 raise RuntimeError(
@@ -359,38 +398,57 @@ def ensure_inria_dataset_from_source(
                 )
 
             if not raw_extract_dir.exists():
-                detected = _find_raw_inria_root(staging_dir) or _find_raw_inria_root(archive_dir)
+                detected = _find_raw_inria_root(staging_dir) or _find_raw_inria_root(work_dir)
                 if detected is None:
                     raise RuntimeError(
                         f'Expected extracted dataset at {raw_extract_dir}, but it was not found and no raw Inria root could be detected.'
                     )
                 raw_extract_dir = detected
-            if data_root_path.exists():
-                shutil.rmtree(str(data_root_path))
-            _materialize_expected_layout(raw_extract_dir, data_root_path)
+            raw_source_root = raw_extract_dir
+            if raw_root_path.exists():
+                shutil.rmtree(str(raw_root_path))
+            if raw_source_root.resolve() != raw_root_path.resolve():
+                shutil.move(str(raw_source_root), str(raw_root_path))
+                raw_source_root = raw_root_path
+            _materialize_expected_layout(raw_source_root, prepared_root_path)
+            prepared_ok = True
         finally:
-            shutil.rmtree(str(staging_dir), ignore_errors=True)
+            if prepared_ok:
+                shutil.rmtree(str(staging_dir), ignore_errors=True)
+                shutil.rmtree(str(work_dir), ignore_errors=True)
 
-        if _has_inria_dataset(data_root_path):
-            _validate_prepared_layout(data_root_path)
-            print(f'Inria dataset is ready at {data_root_path}')
+        if _has_prepared_inria_dataset(prepared_root_path):
+            _validate_prepared_layout(prepared_root_path)
+            print(f'Inria dataset is ready at {prepared_root_path}')
             return
         raise RuntimeError(
             f'Failed to prepare Inria dataset from archive {archive_input}. '
             'Please verify the archive contains the expected raw layout.'
         )
 
+    if raw_root_path.exists() and _is_raw_inria_layout(raw_root_path):
+        if prepared_root_path.exists():
+            shutil.rmtree(str(prepared_root_path))
+        _materialize_expected_layout(raw_root_path, prepared_root_path)
+        print(f'Inria dataset is ready at {prepared_root_path}')
+        return
+
     if not download:
         raise FileNotFoundError(
-            f'Inria dataset not found at {data_root_path}. '
-            'Pass --download-data to fetch and prepare it automatically, or '
-            'manually place the extracted archive in the expected layout.'
+            f'Inria raw dataset not found at {raw_root_path} and prepared dataset not found at {prepared_root_path}. '
+            'Pass --download-data to fetch the raw archive automatically, or '
+            'provide --inria-archive with an extracted raw folder/archive.'
         )
 
-    archive_dir = data_root_path.parent
-    archive_path = archive_dir / ARCHIVE_NAME
-    staging_dir = archive_dir / '_inria_extract'
+    source_dir = prepared_root_path.parent / '_inria_source'
+    archive_path = source_dir / ARCHIVE_NAME
+    staging_dir = source_dir / '_extract'
     raw_extract_dir = staging_dir / 'AerialImageDataset'
+    prepared_ok = False
+
+    if source_dir.exists():
+        shutil.rmtree(str(source_dir))
+    source_dir.mkdir(parents=True, exist_ok=True)
 
     for url in INRIA_URLS:
         try:
@@ -417,10 +475,10 @@ def ensure_inria_dataset_from_source(
         print(f'Extracting {archive_path} to {staging_dir}...')
         _extract_zip(archive_path, staging_dir)
     elif _looks_like_shell_script(archive_path):
-        script_copy = archive_dir / 'getAerial.sh'
+        script_copy = source_dir / 'getAerial.sh'
         shutil.copy2(archive_path, script_copy)
         print(f'Running Inria download script: {script_copy}')
-        _run_shell_script(script_copy, archive_dir)
+        _run_shell_script(script_copy, source_dir)
         script_copy.unlink(missing_ok=True)
     else:
         raise RuntimeError(
@@ -428,19 +486,26 @@ def ensure_inria_dataset_from_source(
             'The Inria site may have changed its download flow.'
         )
 
-    detected_raw_root = _find_raw_inria_root(staging_dir) or _find_raw_inria_root(archive_dir)
+    detected_raw_root = _find_raw_inria_root(staging_dir) or _find_raw_inria_root(source_dir)
     if detected_raw_root is None:
         raise RuntimeError(
-            f'Expected extracted dataset at {raw_extract_dir}, but no raw Inria root could be detected in {staging_dir} or {archive_dir}.'
+            f'Expected extracted dataset at {raw_extract_dir}, but no raw Inria root could be detected in {staging_dir} or {source_dir}.'
         )
 
-    if data_root_path.exists():
-        shutil.rmtree(str(data_root_path))
+    if raw_root_path.exists():
+        shutil.rmtree(str(raw_root_path))
 
-    _materialize_expected_layout(detected_raw_root, data_root_path)
+    if detected_raw_root.resolve() != raw_root_path.resolve():
+        shutil.move(str(detected_raw_root), str(raw_root_path))
+        detected_raw_root = raw_root_path
 
-    shutil.rmtree(str(staging_dir), ignore_errors=True)
+    _materialize_expected_layout(detected_raw_root, prepared_root_path)
+    prepared_ok = True
 
-    _validate_prepared_layout(data_root_path)
+    if prepared_ok:
+        shutil.rmtree(str(staging_dir), ignore_errors=True)
+        shutil.rmtree(str(source_dir), ignore_errors=True)
 
-    print(f'Inria dataset is ready at {data_root_path}')
+    _validate_prepared_layout(prepared_root_path)
+
+    print(f'Inria dataset is ready at {prepared_root_path}')

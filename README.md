@@ -105,8 +105,9 @@ python train.py \
 
 # Train on Inria Aerial Image Labeling dataset
 python train.py \
-    --config inria_swin_tiny \
-    --data-root data/inria/AerialImageDataset
+    --config swin_tiny \
+    --dataset inria \
+    --raw-data-root data/inria/AerialImageDataset
 ```
 
 ### Inference
@@ -169,14 +170,13 @@ All configurations are in `config.py` and match MMSegmentation settings:
 
 ### Inria Aerial Image Labeling
 
-The following configs train on Inria with binary classes:
+Use any backbone config with `--dataset inria`:
 
-- `inria_swin_tiny`
-- `inria_swin_small`
-- `inria_swin_base`
-- `inria_swin_large`
+```bash
+python train.py --config swin_base --dataset inria --raw-data-root data/inria/AerialImageDataset
+```
 
-For these configs:
+For Inria:
 
 - `num_classes` is `2` for background and building
 - source images larger than `512x512` are split into `224x224` tiles during dataset preparation after download

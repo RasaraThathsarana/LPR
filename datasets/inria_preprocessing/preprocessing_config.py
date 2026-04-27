@@ -1,7 +1,8 @@
 """Preprocessing pipeline configuration for the Inria dataset."""
 
 DATASET_TYPE = 'InriaAerialImageDataset'
-DATA_ROOT = 'data/inria/AerialImageDataset'
+RAW_DATA_ROOT = 'data/inria/AerialImageDataset'
+DATA_ROOT = 'data/inria/AerialImageDataset_tiled'
 CROP_SIZE = (224, 224)
 TILE_SIZE = 224
 LARGE_IMAGE_THRESHOLD = 512

@@ -8,7 +8,25 @@ These configurations replicate MMSegmentation's settings for:
 - Swin Large
 """
 
-DEFAULT_CONFIG_NAME = 'inria_swin_tiny'
+from __future__ import annotations
+
+import copy
+
+
+def _deep_merge_dicts(base: dict, override: dict) -> dict:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+DEFAULT_CONFIG_NAME = 'swin_base'
 
 # Base configuration common to all variants
 BASE_CONFIG = {
@@ -25,14 +43,14 @@ BASE_CONFIG = {
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
         'max_iters': 50000,
-        'val_interval': 2527,
+        'val_interval': 4100,
     },
     
     # Data loading
     'num_workers': 4,
     'pin_memory': True,
     
-    'accumulation_steps': 4,  # Number of batches to accumulate gradients over
+    'accumulation_steps': 1,  # Number of batches to accumulate gradients over
     
     # Logging
     'log_interval': 50,
@@ -60,7 +78,8 @@ INRIA_BASE_CONFIG = {
     **BASE_CONFIG,
     'num_classes': 2,
     'dataset': 'inria',
-    'data_root': 'data/inria/AerialImageDataset',
+    'raw_data_root': 'data/inria/AerialImageDataset',
+    'data_root': 'data/inria/AerialImageDataset_tiled',
     'crop_size': (224, 224),
 }
 
@@ -160,7 +179,7 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 2,
+    'batch_size': 16,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
@@ -177,7 +196,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': True,
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -196,7 +215,7 @@ SWIN_BASE_CONFIG = {
     },
     'optimizer': {
         'type': 'AdamW',
-        'lr': 6e-5,
+        'lr': 1e-4, #6e-5,
         'betas': (0.9, 0.999),
         'weight_decay': 0.01,
     },
@@ -258,7 +277,7 @@ SWIN_BASE_LPR_CONFIG = {
         'adapter_kwargs': {
             'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
             'out_channels': 256,
-            'use_checkpoint': True,
+            'use_checkpoint': False,
         },
         'decoder': 'lpr',
         'decoder_kwargs': {
@@ -269,7 +288,7 @@ SWIN_BASE_LPR_CONFIG = {
                 'patch_size': 16,
                 'hidden_dim': 256,
                 'cnn_dim': 64,
-                'use_checkpoint': True,
+                'use_checkpoint': False,
             }
         },
         'auxiliary_kwargs': {
@@ -288,47 +307,39 @@ CONFIG = {
     'swin_base': SWIN_BASE_CONFIG,
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
-    'inria_swin_tiny': {
-        **INRIA_BASE_CONFIG,
-        'batch_size': 8,
-        'optimizer': {
-            **SWIN_TINY_CONFIG['optimizer'],
-        },
-        'model': {
-            **SWIN_TINY_CONFIG['model'],
-        },
+}
+
+
+DATASET_PRESETS = {
+    'ade20k': {
+        'dataset': 'ade20k',
+        'data_root': 'data/ade/ADEChallengeData2016',
+        'crop_size': (512, 512),
     },
-    'inria_swin_small': {
-        **INRIA_BASE_CONFIG,
-        'batch_size': 8,
-        'optimizer': {
-            **SWIN_SMALL_CONFIG['optimizer'],
-        },
-        'model': {
-            **SWIN_SMALL_CONFIG['model'],
-        },
-    },
-    'inria_swin_base': {
-        **INRIA_BASE_CONFIG,
-        'batch_size': 4,
-        'optimizer': {
-            **SWIN_BASE_CONFIG['optimizer'],
-        },
-        'model': {
-            **SWIN_BASE_CONFIG['model'],
-        },
-    },
-    'inria_swin_large': {
-        **INRIA_BASE_CONFIG,
-        'batch_size': 2,
-        'optimizer': {
-            **SWIN_LARGE_CONFIG['optimizer'],
-        },
-        'model': {
-            **SWIN_LARGE_CONFIG['model'],
-        },
+    'inria': {
+        'dataset': 'inria',
+        'num_classes': 2,
+        'raw_data_root': 'data/inria/AerialImageDataset',
+        'data_root': 'data/inria/AerialImageDataset_tiled',
+        'crop_size': (224, 224),
     },
 }
+
+
+def build_config(config_name: str, dataset_name: str | None = None) -> dict:
+    """Build a runtime config by combining a backbone config with a dataset preset."""
+    if config_name not in CONFIG:
+        raise KeyError(f'Unknown config: {config_name}')
+
+    config = copy.deepcopy(CONFIG[config_name])
+    if dataset_name is None:
+        return config
+
+    dataset_key = dataset_name.lower()
+    if dataset_key not in DATASET_PRESETS:
+        raise KeyError(f'Unknown dataset: {dataset_name}')
+
+    return _deep_merge_dicts(config, DATASET_PRESETS[dataset_key])
 
 
 # Model variant details (for reference)
@@ -376,6 +387,9 @@ def print_config(config_name: str):
     print(f"Learning rate: {config['optimizer']['lr']}")
     print(f"Max iterations: {config['train_cfg']['max_iters']}")
     print(f"Validation interval: {config['train_cfg']['val_interval']} iters")
+    if config.get('dataset') == 'inria':
+        print(f"Raw data root: {config.get('raw_data_root', 'N/A')}")
+        print(f"Prepared data root: {config.get('data_root', 'N/A')}")
     print(f"\nModel architecture:")
     print(f"  encoder: {config['model']['encoder']}")
     print(f"  aux_decoder_enabled: {config['model'].get('use_auxiliary_decoder', True)}")

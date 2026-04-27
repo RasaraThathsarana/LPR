@@ -9,7 +9,6 @@ import argparse
 import torch
 import random
 import os
-import copy
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
@@ -23,9 +22,9 @@ import json
 from models import build_model
 from models.model import translate_checkpoint_state_dict
 from configs import CONFIG
-from configs.config import DEFAULT_CONFIG_NAME
+from configs.config import DEFAULT_CONFIG_NAME, build_config
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
-from datasets.inria_preprocessing.download import ensure_inria_dataset
+from datasets.inria_preprocessing.download import ensure_inria_dataset_from_source
 
 
 class Trainer:
@@ -426,9 +425,11 @@ def train(args):
         set_random_seed(args.seed, args.deterministic)
     
     # Load configuration
-    config = copy.deepcopy(CONFIG[args.config])
+    config = build_config(args.config, args.dataset)
     if args.data_root:
         config['data_root'] = args.data_root
+    if args.raw_data_root:
+        config['raw_data_root'] = args.raw_data_root
 
     print(f"Config: {args.config}")
     print(f"Configuration: {json.dumps(config, indent=2)}")
@@ -440,9 +441,18 @@ def train(args):
         ensure_ade20k_dataset(config['data_root'], download=args.download_data)
         from datasets.ade20k_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
     elif dataset_name == 'inria':
-        if args.download_data:
+        prepared_root = config['data_root']
+        raw_root = config.get('raw_data_root', Path(prepared_root).with_name('AerialImageDataset'))
+        if args.inria_archive:
+            print(f"Preparing the Inria dataset from: {args.inria_archive}")
+        elif args.download_data:
             print("Downloading and preparing the Inria dataset...")
-        ensure_inria_dataset(config['data_root'], download=args.download_data)
+        ensure_inria_dataset_from_source(
+            raw_root=raw_root,
+            prepared_root=prepared_root,
+            download=args.download_data,
+            archive_path=args.inria_archive,
+        )
         from datasets.inria_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
     else:
         raise ValueError(f"Unknown dataset in config: {dataset_name}")
@@ -517,11 +527,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train Swin UPerNet on a supported segmentation dataset')
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_NAME,
                        choices=list(CONFIG.keys()),
-                       help='Model configuration')
+                       help='Model backbone/config name')
+    parser.add_argument('--dataset', type=str, default=None,
+                       choices=['ade20k', 'inria'],
+                       help='Dataset preset to pair with the selected backbone')
     parser.add_argument('--data-root', type=str, default=None,
-                       help='Override dataset root path from config')
+                       help='Override prepared dataset root path from config')
+    parser.add_argument('--raw-data-root', type=str, default=None,
+                       help='Override raw dataset root path for Inria')
     parser.add_argument('--download-data', action='store_true',
                        help='Download and prepare the selected dataset automatically if missing')
+    parser.add_argument('--inria-archive', type=str, default=None,
+                       help='Path to a local Inria raw folder, archive, or extracted dataset to prepare')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                        help='Directory to save checkpoints')
     parser.add_argument('--log-dir', type=str, default='logs',

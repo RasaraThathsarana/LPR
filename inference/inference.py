@@ -16,13 +16,14 @@ from models import build_model
 from models.model import translate_checkpoint_state_dict
 from datasets import ADE20KDataset, InriaAerialImageDataset
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
-from datasets.inria_preprocessing.download import ensure_inria_dataset
+from datasets.inria_preprocessing.download import ensure_inria_dataset_from_source
 from datasets.ade20k_preprocessing.preprocessing import build_pipeline
 from datasets.ade20k_preprocessing.preprocessing_config import VAL_PIPELINE as ADE20K_VAL_PIPELINE
 from datasets.inria_preprocessing.preprocessing_config import VAL_PIPELINE as INRIA_VAL_PIPELINE
 from datasets.inria_preprocessing.inria_dataset import build_tile_coordinates, stitch_tile_logits
 from evaluation.evaluation import SegmentationMetrics
 from configs import CONFIG
+from configs.config import build_config
 
 
 class SegmentationInferencer:
@@ -276,7 +277,12 @@ if __name__ == '__main__':
         help='Dataset split to infer on'
     )
     parser.add_argument(
-        '--data-root', type=str, default='data/ade/ADEChallengeData2016',
+        '--dataset', type=str, default=None,
+        choices=['ade20k', 'inria'],
+        help='Dataset preset to pair with the selected backbone'
+    )
+    parser.add_argument(
+        '--data-root', type=str, default=None,
         help='Path to dataset root'
     )
     parser.add_argument(
@@ -303,12 +309,16 @@ if __name__ == '__main__':
         '--device', type=str, default='cuda',
         help='Device to use'
     )
+    parser.add_argument(
+        '--raw-data-root', type=str, default=None,
+        help='Override raw dataset root path for Inria'
+    )
     
     args = parser.parse_args()
     
     # Smart configuration loading mapped from the --encoder string
     if args.encoder in CONFIG:
-        cfg = CONFIG[args.encoder]
+        cfg = build_config(args.encoder, args.dataset)
         encoder_name = cfg['model']['encoder']
         encoder_kwargs = cfg['model'].get('encoder_kwargs', {})
         decoder_kwargs = cfg['model'].get('decoder_kwargs', {})
@@ -367,15 +377,23 @@ if __name__ == '__main__':
         print(f"Inferring on {args.dataset_split} split...")
         
         if dataset_name == 'inria':
-            ensure_inria_dataset(args.data_root, download=args.download_data)
+            prepared_root = args.data_root or cfg.get('data_root', 'data/inria/AerialImageDataset_tiled')
+            raw_root = args.raw_data_root or cfg.get('raw_data_root', Path(prepared_root).with_name('AerialImageDataset'))
+            ensure_inria_dataset_from_source(
+                raw_root=raw_root,
+                prepared_root=prepared_root,
+                download=args.download_data,
+                archive_path=None,
+            )
             dataset = InriaAerialImageDataset(
-                data_root=args.data_root,
+                data_root=prepared_root,
                 split=args.dataset_split,
             )
         else:
-            ensure_ade20k_dataset(args.data_root, download=args.download_data)
+            prepared_root = args.data_root or cfg.get('data_root', 'data/ade/ADEChallengeData2016')
+            ensure_ade20k_dataset(prepared_root, download=args.download_data)
             dataset = ADE20KDataset(
-                data_root=args.data_root,
+                data_root=prepared_root,
                 split=args.dataset_split,
                 reduce_zero_label=True,
             )
