@@ -281,7 +281,7 @@ SWIN_BASE_LPR_CONFIG = {
         },
         'decoder': 'lpr',
         'decoder_kwargs': {
-            # The adapter reduces the 4 feature maps into a single 512-channel tensor
+            # The adapter reduces the 4 feature maps into a single 256-channel tensor
             'in_channels': [256],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
@@ -289,6 +289,36 @@ SWIN_BASE_LPR_CONFIG = {
                 'hidden_dim': 256,
                 'cnn_dim': 64,
                 'use_checkpoint': False,
+            },
+        'auxiliary_kwargs': {
+            'in_channels': 768,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
+        },
+        },
+    },
+}
+
+
+# Swin Base with LPR High Resolution Decoder configuration
+SWIN_BASE_LPR_HI_CONFIG = {
+    **SWIN_BASE_CONFIG,
+    'model': {
+        **SWIN_BASE_CONFIG['model'],
+        'adapter': None,
+        'decoder': 'lpr_hi',
+        'decoder_kwargs': {
+            # Process all multi-stage features directly from Swin Base
+            'in_channels': [128, 256, 512, 1024],
+            'lpr_kwargs': {
+                'in_channels': 3,       # Image channels for the internal UNet
+                'hidden_dim': 256,
+                'cnn_dim': 64,
+                'use_checkpoint': True,
             }
         },
         'auxiliary_kwargs': {
@@ -307,6 +337,7 @@ CONFIG = {
     'swin_base': SWIN_BASE_CONFIG,
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
+    'swin_base_lpr_hi': SWIN_BASE_LPR_HI_CONFIG,
 }
 
 
