@@ -63,7 +63,7 @@ class Trainer:
         self.writer = SummaryWriter(str(self.log_dir))
         
         # Setup AMP scaler for mixed precision
-        self.scaler = torch.amp.GradScaler(enabled=self.device.startswith('cuda'))
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.device.startswith('cuda'))
         
         # Training state
         self.current_iter = 0
