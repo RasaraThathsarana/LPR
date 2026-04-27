@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import urllib.request
+import urllib.error
 import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
@@ -45,10 +46,35 @@ def _download_file(url: str, target_path: Path) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc=f'Downloading {target_path.name}') as progress:
-        def report_hook(blocks, block_size, total_size=None):
-            progress.update_to(blocks, block_size, total_size)
+        request = urllib.request.Request(
+            url,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (X11; Linux x86_64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/125.0 Safari/537.36'
+                ),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Referer': 'https://project.inria.fr/aerialimagelabeling/',
+            },
+        )
 
-        urllib.request.urlretrieve(url, filename=str(target_path), reporthook=report_hook)
+        try:
+            with urllib.request.urlopen(request) as response, open(target_path, 'wb') as out_file:
+                total_size = response.headers.get('Content-Length')
+                if total_size is not None:
+                    progress.total = int(total_size)
+
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    progress.update(len(chunk))
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f'HTTP error {exc.code} while downloading {url}') from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f'Network error while downloading {url}: {exc.reason}') from exc
 
 
 def _extract_zip(zip_path: Path, extract_to: Path) -> None:
@@ -201,6 +227,8 @@ def ensure_inria_dataset(data_root: str, download: bool = False) -> None:
             if not archive_path.exists():
                 print(f'Downloading Inria dataset from {url} to {archive_path}...')
                 _download_file(url, archive_path)
+                if archive_path.stat().st_size == 0:
+                    raise RuntimeError(f'Downloaded archive is empty: {archive_path}')
             break
         except Exception:
             if archive_path.exists():
