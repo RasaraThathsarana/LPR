@@ -25,6 +25,7 @@ INRIA_URLS = [
 ARCHIVE_NAME = 'AerialImageDataset.zip'
 TILE_SIZE = 224
 LARGE_IMAGE_THRESHOLD = 512
+MIN_FREE_BYTES = 45 * 1024**3
 
 
 class DownloadProgressBar(tqdm):
@@ -42,6 +43,63 @@ def _has_inria_dataset(data_root: Path) -> bool:
         data_root / 'validation' / 'gt',
     ]
     return all(path.exists() for path in required_paths)
+
+
+def _count_tiles(directory: Path) -> int:
+    if not directory.exists():
+        return 0
+    return sum(1 for path in directory.iterdir() if path.is_file() and path.suffix.lower() == '.png')
+
+
+def _validate_prepared_layout(data_root: Path) -> None:
+    required_dirs = [
+        data_root / 'training' / 'images',
+        data_root / 'training' / 'gt',
+        data_root / 'validation' / 'images',
+        data_root / 'validation' / 'gt',
+    ]
+    missing = [str(path) for path in required_dirs if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            'Prepared Inria dataset is missing required directories: '
+            + ', '.join(missing)
+        )
+
+    train_images = _count_tiles(data_root / 'training' / 'images')
+    train_masks = _count_tiles(data_root / 'training' / 'gt')
+    val_images = _count_tiles(data_root / 'validation' / 'images')
+    val_masks = _count_tiles(data_root / 'validation' / 'gt')
+
+    if train_images == 0 or train_masks == 0 or val_images == 0 or val_masks == 0:
+        raise RuntimeError(
+            'Prepared Inria dataset is empty or incomplete after tiling. '
+            f'train(images={train_images}, masks={train_masks}), '
+            f'val(images={val_images}, masks={val_masks}).'
+        )
+
+
+def _find_raw_inria_root(search_root: Path) -> Optional[Path]:
+    """Find the raw Inria folder that contains train/test splits."""
+    candidates = [search_root]
+    try:
+        candidates.extend(
+            sorted(
+                path for path in search_root.rglob('*')
+                if path.is_dir()
+            )
+        )
+    except OSError:
+        pass
+
+    for candidate in candidates:
+        train_root = candidate / 'train'
+        test_root = candidate / 'test'
+        if train_root.exists() and test_root.exists():
+            if (train_root / 'images').exists() and ((train_root / 'gt').exists() or (candidate / 'gt').exists()):
+                return candidate
+            if (candidate / 'training' / 'images').exists():
+                return candidate
+    return None
 
 
 def _download_file(url: str, target_path: Path) -> None:
@@ -89,6 +147,19 @@ def _extract_zip(zip_path: Path, extract_to: Path) -> None:
 
 def _has_7z() -> bool:
     return shutil.which('7z') is not None or shutil.which('7za') is not None
+
+
+def _ensure_free_space(target_dir: Path, required_bytes: int = MIN_FREE_BYTES) -> None:
+    usage = shutil.disk_usage(str(target_dir))
+    if usage.free < required_bytes:
+        raise RuntimeError(
+            f'Not enough free disk space at {target_dir}: '
+            f'need at least {required_bytes / 1024**3:.1f} GiB free, '
+            f'found {usage.free / 1024**3:.1f} GiB. '
+            'The official Inria archive is very large, so Kaggle-style environments '
+            'usually need a mounted dataset or a pre-downloaded archive in '
+            '`--inria-archive`.'
+        )
 
 
 def _looks_like_shell_script(path: Path) -> bool:
@@ -187,6 +258,7 @@ def _prepare_tiled_split(src_images: Path, src_masks: Optional[Path], dst_images
 
 def _materialize_expected_layout(raw_root: Path, data_root: Path) -> None:
     """Convert the raw Inria archive layout into tiled train/val/test folders."""
+    raw_root = _find_raw_inria_root(raw_root) or raw_root
     train_root = raw_root / 'train'
     test_root = raw_root / 'test'
 
@@ -232,6 +304,8 @@ def _materialize_expected_layout(raw_root: Path, data_root: Path) -> None:
                 image_dst = data_root / 'test' / 'images' / f'{image_path.stem}_tile_{tile_idx:04d}.png'
                 _save_tile(image_tile, np.zeros((TILE_SIZE, TILE_SIZE), dtype=np.uint8), image_dst, None)
 
+    _validate_prepared_layout(data_root)
+
 
 def ensure_inria_dataset(data_root: str, download: bool = False) -> None:
     return ensure_inria_dataset_from_source(data_root, download=download, archive_path=None)
@@ -246,18 +320,16 @@ def ensure_inria_dataset_from_source(
     if _has_inria_dataset(data_root_path):
         return
 
+    _ensure_free_space(data_root_path.parent)
+
     if archive_path:
         archive_input = Path(archive_path)
         if archive_input.is_dir():
             if data_root_path.exists():
                 shutil.rmtree(str(data_root_path))
             _materialize_expected_layout(archive_input, data_root_path)
-            if _has_inria_dataset(data_root_path):
-                print(f'Inria dataset is ready at {data_root_path}')
-                return
-            raise RuntimeError(
-                f'Archive directory provided at {archive_input}, but it did not contain the expected raw Inria layout.'
-            )
+            print(f'Inria dataset is ready at {data_root_path}')
+            return
 
         if not archive_input.exists():
             raise FileNotFoundError(f'Inria archive not found: {archive_input}')
@@ -287,7 +359,12 @@ def ensure_inria_dataset_from_source(
                 )
 
             if not raw_extract_dir.exists():
-                raise RuntimeError(f'Expected extracted dataset at {raw_extract_dir}, but it was not found.')
+                detected = _find_raw_inria_root(staging_dir) or _find_raw_inria_root(archive_dir)
+                if detected is None:
+                    raise RuntimeError(
+                        f'Expected extracted dataset at {raw_extract_dir}, but it was not found and no raw Inria root could be detected.'
+                    )
+                raw_extract_dir = detected
             if data_root_path.exists():
                 shutil.rmtree(str(data_root_path))
             _materialize_expected_layout(raw_extract_dir, data_root_path)
@@ -295,6 +372,7 @@ def ensure_inria_dataset_from_source(
             shutil.rmtree(str(staging_dir), ignore_errors=True)
 
         if _has_inria_dataset(data_root_path):
+            _validate_prepared_layout(data_root_path)
             print(f'Inria dataset is ready at {data_root_path}')
             return
         raise RuntimeError(
@@ -350,20 +428,19 @@ def ensure_inria_dataset_from_source(
             'The Inria site may have changed its download flow.'
         )
 
-    if not raw_extract_dir.exists():
-        raise RuntimeError(f'Expected extracted dataset at {raw_extract_dir}, but it was not found.')
+    detected_raw_root = _find_raw_inria_root(staging_dir) or _find_raw_inria_root(archive_dir)
+    if detected_raw_root is None:
+        raise RuntimeError(
+            f'Expected extracted dataset at {raw_extract_dir}, but no raw Inria root could be detected in {staging_dir} or {archive_dir}.'
+        )
 
     if data_root_path.exists():
         shutil.rmtree(str(data_root_path))
 
-    _materialize_expected_layout(raw_extract_dir, data_root_path)
+    _materialize_expected_layout(detected_raw_root, data_root_path)
 
     shutil.rmtree(str(staging_dir), ignore_errors=True)
 
-    if not _has_inria_dataset(data_root_path):
-        raise RuntimeError(
-            f'Failed to prepare Inria dataset at {data_root_path}. '
-            'Please verify the extracted archive contains the expected raw layout.'
-        )
+    _validate_prepared_layout(data_root_path)
 
     print(f'Inria dataset is ready at {data_root_path}')
