@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import urllib.request
 import urllib.error
 import zipfile
@@ -84,6 +85,32 @@ def _extract_zip(zip_path: Path, extract_to: Path) -> None:
 
     with zipfile.ZipFile(str(zip_path), 'r') as archive:
         archive.extractall(path=str(extract_to))
+
+
+def _has_7z() -> bool:
+    return shutil.which('7z') is not None or shutil.which('7za') is not None
+
+
+def _looks_like_shell_script(path: Path) -> bool:
+    try:
+        with path.open('rb') as handle:
+            head = handle.read(2048)
+    except OSError:
+        return False
+    return head.startswith(b'#!') or b'getAerial' in head or b'7z' in head or b'curl' in head
+
+
+def _run_shell_script(script_path: Path, workdir: Path) -> None:
+    if not _has_7z():
+        raise RuntimeError(
+            'The Inria download endpoint returned a shell script that requires `7z` '
+            'to extract the split archive, but `7z` is not installed in this environment. '
+            'Install `p7zip-full` or provide `--inria-archive` with an already extracted '
+            'AerialImageDataset folder or archive.'
+        )
+
+    script_path.chmod(script_path.stat().st_mode | 0o111)
+    subprocess.run(['bash', str(script_path.name)], cwd=str(workdir), check=True)
 
 
 def _iter_city_images(directory: Path) -> Iterable[Path]:
@@ -244,7 +271,21 @@ def ensure_inria_dataset_from_source(
         staging_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            _extract_zip(archive_input, staging_dir)
+            if zipfile.is_zipfile(str(archive_input)):
+                _extract_zip(archive_input, staging_dir)
+            elif _looks_like_shell_script(archive_input):
+                if data_root_path.exists():
+                    shutil.rmtree(str(data_root_path))
+                script_copy = archive_dir / 'getAerial.sh'
+                shutil.copy2(archive_input, script_copy)
+                _run_shell_script(script_copy, archive_dir)
+                script_copy.unlink(missing_ok=True)
+            else:
+                raise RuntimeError(
+                    f'Unsupported Inria archive format: {archive_input}. '
+                    'Expected a zip archive, a getAerial.sh script, or an extracted AerialImageDataset folder.'
+                )
+
             if not raw_extract_dir.exists():
                 raise RuntimeError(f'Expected extracted dataset at {raw_extract_dir}, but it was not found.')
             if data_root_path.exists():
@@ -294,8 +335,20 @@ def ensure_inria_dataset_from_source(
     if staging_dir.exists():
         shutil.rmtree(str(staging_dir))
 
-    print(f'Extracting {archive_path} to {staging_dir}...')
-    _extract_zip(archive_path, staging_dir)
+    if zipfile.is_zipfile(str(archive_path)):
+        print(f'Extracting {archive_path} to {staging_dir}...')
+        _extract_zip(archive_path, staging_dir)
+    elif _looks_like_shell_script(archive_path):
+        script_copy = archive_dir / 'getAerial.sh'
+        shutil.copy2(archive_path, script_copy)
+        print(f'Running Inria download script: {script_copy}')
+        _run_shell_script(script_copy, archive_dir)
+        script_copy.unlink(missing_ok=True)
+    else:
+        raise RuntimeError(
+            f'Downloaded file {archive_path} is not a zip archive or recognized shell script. '
+            'The Inria site may have changed its download flow.'
+        )
 
     if not raw_extract_dir.exists():
         raise RuntimeError(f'Expected extracted dataset at {raw_extract_dir}, but it was not found.')
