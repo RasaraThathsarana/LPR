@@ -8,7 +8,6 @@ from .inria_dataset import (
 )
 from .preprocessing import (
     Compose,
-    RandomResize,
     Resize,
     RandomCrop,
     RandomFlip,
@@ -26,7 +25,6 @@ __all__ = [
     'extract_tile',
     'stitch_tile_logits',
     'Compose',
-    'RandomResize',
     'Resize',
     'RandomCrop',
     'RandomFlip',
@@ -39,4 +37,3 @@ __all__ = [
     'create_val_loader',
     'ensure_inria_dataset',
 ]
-
