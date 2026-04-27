@@ -2,8 +2,8 @@
 Swin UPerNet - Semantic Segmentation Training Framework
 
 A standalone implementation of Swin Transformer-based UPerNet for semantic
-segmentation on the ADE20K dataset. This framework replicates MMSegmentation's
-training setup while providing easy model modifications.
+segmentation. This framework replicates MMSegmentation-style training while
+supporting both ADE20K and Inria Aerial Image Labeling workflows.
 
 Available models:
 - swin_tiny: 29M parameters

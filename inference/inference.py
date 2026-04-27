@@ -14,10 +14,13 @@ import cv2
 
 from models import build_model
 from models.model import translate_checkpoint_state_dict
-from datasets import ADE20KDataset
+from datasets import ADE20KDataset, InriaAerialImageDataset
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
+from datasets.inria_preprocessing.download import ensure_inria_dataset
 from datasets.ade20k_preprocessing.preprocessing import build_pipeline
-from datasets.ade20k_preprocessing.preprocessing_config import VAL_PIPELINE
+from datasets.ade20k_preprocessing.preprocessing_config import VAL_PIPELINE as ADE20K_VAL_PIPELINE
+from datasets.inria_preprocessing.preprocessing_config import VAL_PIPELINE as INRIA_VAL_PIPELINE
+from datasets.inria_preprocessing.inria_dataset import build_tile_coordinates, stitch_tile_logits
 from evaluation.evaluation import SegmentationMetrics
 from configs import CONFIG
 
@@ -41,9 +44,14 @@ class SegmentationInferencer:
     ):
         self.device = device
         self.num_classes = num_classes
+        self.dataset_name = None
+        self.tile_size = 224
+        self.large_image_threshold = 512
         
         # Build identical preprocessing pipeline to training
-        self.pipeline = build_pipeline(VAL_PIPELINE)
+        if input_norm_cfg is None:
+            input_norm_cfg = {}
+        self.input_norm_cfg = input_norm_cfg
         
         # Build model
         self.model = build_model(
@@ -58,6 +66,14 @@ class SegmentationInferencer:
             input_norm_cfg=input_norm_cfg,
             pretrained=False,
         ).to(device)
+
+        self.dataset_name = input_norm_cfg.get('dataset', 'ade20k')
+        if self.dataset_name == 'inria':
+            self.pipeline = build_pipeline(INRIA_VAL_PIPELINE)
+            self.tile_size = 224
+            self.large_image_threshold = 512
+        else:
+            self.pipeline = build_pipeline(ADE20K_VAL_PIPELINE)
         
         # Load checkpoint
         self._load_checkpoint(checkpoint_path)
@@ -82,6 +98,18 @@ class SegmentationInferencer:
             print(f"Warning: Loaded with {len(missing_keys)} missing keys and {len(unexpected_keys)} unexpected keys.")
     
     @torch.no_grad()
+    def _predict_logits_from_array(self, image: np.ndarray) -> np.ndarray:
+        """Run the model on a single processed image/patch and return logits."""
+        sample = {
+            'img': image,
+            'gt_semantic_seg': np.zeros((image.shape[0], image.shape[1]), dtype=np.int32),
+        }
+        processed = self.pipeline(sample)
+        img_tensor = torch.from_numpy(processed['img']).unsqueeze(0).to(self.device)
+        output = self.model(img_tensor)
+        return output[0].cpu().numpy()
+
+    @torch.no_grad()
     def infer_image(
         self,
         image_path: str,
@@ -97,33 +125,44 @@ class SegmentationInferencer:
         # Load image natively as RGB
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        original_size = (image.shape[1], image.shape[0])  # (W, H)
-        
-        # Apply official validation pipeline
-        sample = {
-            'img': image,
-            'gt_semantic_seg': np.zeros((image.shape[0], image.shape[1]), dtype=np.int32),
-        }
-        processed = self.pipeline(sample)
-        
-        # Convert to tensor
-        img_tensor = torch.from_numpy(processed['img']).unsqueeze(0).to(self.device)
-        
-        # Forward pass
-        output = self.model(img_tensor)  # (1, num_classes, H, W)
-        pred = output.argmax(dim=1)[0].cpu().numpy()  # (H, W)
-        
-        # Resize back to original size
-        if pred.shape[0] >= original_size[1] and pred.shape[1] >= original_size[0]:
-            pred_original = pred[:original_size[1], :original_size[0]]
-        else:
-            pred_original = cv2.resize(
-                pred.astype(np.uint8),
-                original_size,
-                interpolation=cv2.INTER_NEAREST
+        height, width = image.shape[:2]
+
+        if self.dataset_name == 'inria' and max(height, width) > self.large_image_threshold:
+            tile_coords = build_tile_coordinates(
+                height=height,
+                width=width,
+                tile_size=self.tile_size,
+                threshold=self.large_image_threshold,
             )
-        
-        return pred_original
+            tile_logits = []
+            for top, left in tile_coords:
+                bottom = min(top + self.tile_size, height)
+                right = min(left + self.tile_size, width)
+                tile = image[top:bottom, left:right]
+                if tile.shape[0] < self.tile_size or tile.shape[1] < self.tile_size:
+                    tile = cv2.copyMakeBorder(
+                        tile,
+                        0,
+                        self.tile_size - tile.shape[0],
+                        0,
+                        self.tile_size - tile.shape[1],
+                        cv2.BORDER_REFLECT_101,
+                    )
+                logits = self._predict_logits_from_array(tile)
+                tile_logits.append(logits)
+
+            return stitch_tile_logits(
+                tile_logits=tile_logits,
+                tile_coords=tile_coords,
+                image_shape=(height, width),
+                tile_size=self.tile_size,
+            )
+
+        logits = self._predict_logits_from_array(image)
+        pred = logits.argmax(axis=0).astype(np.uint8)
+        if pred.shape != (height, width):
+            pred = cv2.resize(pred, (width, height), interpolation=cv2.INTER_NEAREST)
+        return pred
     
     @torch.no_grad()
     def infer_dataset(
@@ -142,13 +181,8 @@ class SegmentationInferencer:
             if original_gt is not None:
                 original_gt = original_gt.copy()
             
-            # Apply official validation pipeline (Resize + Normalize + Pack)
             processed = self.pipeline(sample)
-            
-            # Convert to tensor
             img_tensor = torch.from_numpy(processed['img']).unsqueeze(0).to(self.device)
-            
-            # Forward pass
             output = self.model(img_tensor)
             pred = output.argmax(dim=1)[0].cpu().numpy()
             predictions.append(pred)
@@ -281,6 +315,7 @@ if __name__ == '__main__':
         use_auxiliary_decoder = cfg['model'].get('use_auxiliary_decoder', True)
         auxiliary_kwargs = cfg['model'].get('auxiliary_kwargs', {})
         input_norm_cfg = cfg.get('data_preprocessor', {})
+        input_norm_cfg = {**input_norm_cfg, 'dataset': cfg.get('dataset', 'ade20k')}
     else:
         encoder_name = args.encoder
         encoder_kwargs = {}
@@ -304,7 +339,8 @@ if __name__ == '__main__':
     )
     
     # Get palette for visualization
-    palette = ADE20KDataset.get_palette()
+    dataset_name = cfg.get('dataset', 'ade20k') if args.encoder in CONFIG else 'ade20k'
+    palette = InriaAerialImageDataset.get_palette() if dataset_name == 'inria' else ADE20KDataset.get_palette()
     
     if args.image:
         # Infer on single image
@@ -330,12 +366,19 @@ if __name__ == '__main__':
         # Infer on dataset
         print(f"Inferring on {args.dataset_split} split...")
         
-        ensure_ade20k_dataset(args.data_root, download=args.download_data)
-        dataset = ADE20KDataset(
-            data_root=args.data_root,
-            split=args.dataset_split,
-            reduce_zero_label=True,
-        )
+        if dataset_name == 'inria':
+            ensure_inria_dataset(args.data_root, download=args.download_data)
+            dataset = InriaAerialImageDataset(
+                data_root=args.data_root,
+                split=args.dataset_split,
+            )
+        else:
+            ensure_ade20k_dataset(args.data_root, download=args.download_data)
+            dataset = ADE20KDataset(
+                data_root=args.data_root,
+                split=args.dataset_split,
+                reduce_zero_label=True,
+            )
         
         results = inferencer.infer_dataset(dataset)
         predictions = results['predictions']

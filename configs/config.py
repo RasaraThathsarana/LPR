@@ -11,6 +11,7 @@ These configurations replicate MMSegmentation's settings for:
 # Base configuration common to all variants
 BASE_CONFIG = {
     'num_classes': 150,
+    'dataset': 'ade20k',
     'data_root': 'data/ade/ADEChallengeData2016',
     'crop_size': (512, 512),
     'data_preprocessor': {
@@ -50,6 +51,15 @@ BASE_CONFIG = {
         'power': 1.0,
         'eta_min': 0.0,
     },
+}
+
+
+INRIA_BASE_CONFIG = {
+    **BASE_CONFIG,
+    'num_classes': 2,
+    'dataset': 'inria',
+    'data_root': 'data/inria/AerialImageDataset',
+    'crop_size': (224, 224),
 }
 
 
@@ -276,6 +286,46 @@ CONFIG = {
     'swin_base': SWIN_BASE_CONFIG,
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
+    'inria_swin_tiny': {
+        **INRIA_BASE_CONFIG,
+        'batch_size': 8,
+        'optimizer': {
+            **SWIN_TINY_CONFIG['optimizer'],
+        },
+        'model': {
+            **SWIN_TINY_CONFIG['model'],
+        },
+    },
+    'inria_swin_small': {
+        **INRIA_BASE_CONFIG,
+        'batch_size': 8,
+        'optimizer': {
+            **SWIN_SMALL_CONFIG['optimizer'],
+        },
+        'model': {
+            **SWIN_SMALL_CONFIG['model'],
+        },
+    },
+    'inria_swin_base': {
+        **INRIA_BASE_CONFIG,
+        'batch_size': 4,
+        'optimizer': {
+            **SWIN_BASE_CONFIG['optimizer'],
+        },
+        'model': {
+            **SWIN_BASE_CONFIG['model'],
+        },
+    },
+    'inria_swin_large': {
+        **INRIA_BASE_CONFIG,
+        'batch_size': 2,
+        'optimizer': {
+            **SWIN_LARGE_CONFIG['optimizer'],
+        },
+        'model': {
+            **SWIN_LARGE_CONFIG['model'],
+        },
+    },
 }
 
 

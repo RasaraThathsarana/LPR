@@ -1,6 +1,6 @@
 # Swin UPerNet for Semantic Segmentation
 
-A standalone Swin Transformer-based UPerNet implementation for semantic segmentation on ADE20K dataset. **Identical training and configuration to MMSegmentation** with easy model modifications.
+A standalone Swin Transformer-based UPerNet implementation for semantic segmentation. It supports ADE20K and Inria Aerial Image Labeling with a shared training loop and easy model modifications.
 
 ## Features
 
@@ -102,6 +102,11 @@ python train.py \
     --data-root data/ade/ADEChallengeData2016 \
     --checkpoint-dir checkpoints \
     --log-dir logs
+
+# Train on Inria Aerial Image Labeling dataset
+python train.py \
+    --config inria_swin_tiny \
+    --data-root data/inria/AerialImageDataset
 ```
 
 ### Inference
@@ -111,13 +116,13 @@ python train.py \
 python inference.py \
     --checkpoint checkpoints/best_model.pth \
     --image path/to/image.jpg \
-    --model swin_base
+    --encoder swin_base
 
 # On validation set
 python inference.py \
     --checkpoint checkpoints/best_model.pth \
     --dataset-split validation \
-    --model swin_base
+    --encoder swin_base
 ```
 
 ### Evaluation
@@ -161,6 +166,21 @@ All configurations are in `config.py` and match MMSegmentation settings:
 - **Scheduler**: Polynomial LR decay (power=0.9)
 - **Crop size**: 512×512
 - **Augmentation**: RandomResize, RandomCrop, RandomFlip, PhotometricDistortion
+
+### Inria Aerial Image Labeling
+
+The following configs train on Inria with binary classes:
+
+- `inria_swin_tiny`
+- `inria_swin_small`
+- `inria_swin_base`
+- `inria_swin_large`
+
+For these configs:
+
+- `num_classes` is `2` for background and building
+- source images larger than `512x512` are split into `224x224` tiles during dataset preparation after download
+- tiled predictions are stitched back together during inference
 
 ## Modifying Models
 

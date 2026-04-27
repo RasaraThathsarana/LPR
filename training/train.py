@@ -1,14 +1,15 @@
 """
-Training script for Swin UPerNet on ADE20K dataset.
+Training script for Swin UPerNet on supported semantic segmentation datasets.
 
-This script replicates MMSegmentation's training loop and configuration
-while using the standalone ADE20K preprocessing module.
+This script replicates MMSegmentation's training loop and configuration while
+using the standalone dataset preprocessing modules in this repository.
 """
 
 import argparse
 import torch
 import random
 import os
+import copy
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
@@ -23,6 +24,7 @@ from models import build_model
 from models.model import translate_checkpoint_state_dict
 from configs import CONFIG
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
+from datasets.inria_preprocessing.download import ensure_inria_dataset
 
 
 class Trainer:
@@ -423,31 +425,43 @@ def train(args):
         set_random_seed(args.seed, args.deterministic)
     
     # Load configuration
-    config = CONFIG[args.config]
+    config = copy.deepcopy(CONFIG[args.config])
     if args.data_root:
         config['data_root'] = args.data_root
 
     print(f"Config: {args.config}")
     print(f"Configuration: {json.dumps(config, indent=2)}")
 
+    dataset_name = config.get('dataset', 'ade20k').lower()
+
     # Ensure dataset is available
-    ensure_ade20k_dataset(config['data_root'], download=args.download_data)
+    if dataset_name == 'ade20k':
+        ensure_ade20k_dataset(config['data_root'], download=args.download_data)
+        from datasets.ade20k_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
+    elif dataset_name == 'inria':
+        if args.download_data:
+            print("Downloading and preparing the Inria dataset...")
+        ensure_inria_dataset(config['data_root'], download=args.download_data)
+        from datasets.inria_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
+    else:
+        raise ValueError(f"Unknown dataset in config: {dataset_name}")
 
     # Import data loading utilities
     from datasets import create_train_loader, create_val_loader
-    from datasets.ade20k_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
     
     # Create data loaders
     print("Creating data loaders...")
     train_loader = create_train_loader(
         config['data_root'],
         TRAIN_PIPELINE,
-        batch_size=config['batch_size']
+        batch_size=config['batch_size'],
+        dataset_name=dataset_name,
     )
     val_loader = create_val_loader(
         config['data_root'],
         VAL_PIPELINE,
-        batch_size=1
+        batch_size=1,
+        dataset_name=dataset_name,
     )
     
     print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
@@ -499,12 +513,12 @@ def train(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train Swin UPerNet on ADE20K')
+    parser = argparse.ArgumentParser(description='Train Swin UPerNet on a supported segmentation dataset')
     parser.add_argument('--config', type=str, default='swin_tiny',
                        choices=list(CONFIG.keys()),
                        help='Model configuration')
-    parser.add_argument('--data-root', type=str, default='data/ade/ADEChallengeData2016',
-                       help='Path to ADE20K dataset')
+    parser.add_argument('--data-root', type=str, default=None,
+                       help='Override dataset root path from config')
     parser.add_argument('--download-data', action='store_true',
                        help='Download ADE20K dataset automatically if missing')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
