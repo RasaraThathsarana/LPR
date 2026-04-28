@@ -117,17 +117,17 @@ class BoundaryLoss(nn.Module):
         edge_map[:, :, :, 1:] += diff_w
         edge_map[:, :, :, :-1] += diff_w
 
-        # Convert the edge magnitude into a bounded probability-like score.
-        # The maximum L1 difference between two probability vectors is 2, and
-        # each pixel can accumulate horizontal and vertical contributions.
-        return (edge_map / 4.0).clamp_(0.0, 1.0)
+        # Convert the edge magnitude into logits so the BCE term stays
+        # autocast-safe. Non-edge pixels are pushed negative, strong edges
+        # become positive.
+        return edge_map - 2.0
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         target = self._squeeze_target(target)
         pred_boundary = self._prediction_boundary(logits)
         target_boundary, boundary_valid = self._target_boundary(target)
 
-        loss = F.binary_cross_entropy(
+        loss = F.binary_cross_entropy_with_logits(
             pred_boundary,
             target_boundary.unsqueeze(1),
             reduction='none',
