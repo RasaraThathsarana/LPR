@@ -75,10 +75,11 @@ class Trainer:
     def _build_optimizer(self) -> optim.Optimizer:
         """Build optimizer from config."""
         opt_cfg = self.config['optimizer']
+        trainable_params = [param for param in self.model.parameters() if param.requires_grad]
         
         if opt_cfg['type'] == 'SGD':
             return optim.SGD(
-                self.model.parameters(),
+                trainable_params,
                 lr=opt_cfg['lr'],
                 momentum=opt_cfg.get('momentum', 0.9),
                 weight_decay=opt_cfg.get('weight_decay', 0.0005)
@@ -276,7 +277,10 @@ class Trainer:
         self.model.load_state_dict(new_state_dict, strict=False)
         
         if 'optimizer' in checkpoint:
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer'])
+            except (ValueError, RuntimeError) as error:
+                print(f"Warning: Skipping optimizer state load ({error}).")
         if 'iter' in checkpoint:
             self.current_iter = checkpoint['iter']
         if 'epoch' in checkpoint:
@@ -499,6 +503,7 @@ def train(args):
         use_auxiliary_decoder=config['model'].get('use_auxiliary_decoder', True),
         auxiliary_kwargs=config['model'].get('auxiliary_kwargs', {}),
         input_norm_cfg=config.get('data_preprocessor', {}),
+        train_encoder=args.train_encoder if args.train_encoder is not None else config['model'].get('train_encoder', True),
         pretrained=config['model'].get('pretrained', False),
         pretrain_path=config['model'].get('pretrain_path', None),
     )
@@ -551,6 +556,12 @@ if __name__ == '__main__':
                        help='Optional decoder module to override config')
     parser.add_argument('--adapter', type=str, default=None,
                        help='Optional adapter module name to insert between encoder and decoder')
+    encoder_train_group = parser.add_mutually_exclusive_group()
+    encoder_train_group.add_argument('--train-encoder', dest='train_encoder', action='store_true',
+                                     help='Enable encoder training')
+    encoder_train_group.add_argument('--freeze-encoder', dest='train_encoder', action='store_false',
+                                     help='Disable encoder training')
+    parser.set_defaults(train_encoder=None)
     parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducibility')
     parser.add_argument('--deterministic', action='store_true',

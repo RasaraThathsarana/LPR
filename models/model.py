@@ -96,6 +96,7 @@ def build_model(
     use_auxiliary_decoder: bool = True,
     auxiliary_kwargs: Optional[dict] = None,
     input_norm_cfg: Optional[dict] = None,
+    train_encoder: bool = True,
     pretrained: bool = False,
     pretrain_path: Optional[str] = None,
 ) -> SegmentationModel:
@@ -129,6 +130,10 @@ def build_model(
         except (ValueError, AttributeError) as e:
             print(f"Notice: Auxiliary decoder disabled. ({e})")
 
+    if not train_encoder:
+        for param in encoder.parameters():
+            param.requires_grad = False
+
     # Print Model Assembly Summary
     enc_total, enc_train = _count_parameters(encoder)
     dec_total, dec_train = _count_parameters(decoder)
@@ -143,6 +148,7 @@ def build_model(
     print("========================================================================")
     print(f"Encoder           : {encoder_name}")
     print(f"  params          : {_format_params(enc_total)} total | {_format_params(enc_train)} trainable")
+    print(f"  trainable       : {train_encoder}")
     print(f"Decoder           : {decoder_name}")
     print(f"  params          : {_format_params(dec_total)} total | {_format_params(dec_train)} trainable")
     if adapter:
