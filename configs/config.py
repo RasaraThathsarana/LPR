@@ -63,6 +63,8 @@ BASE_CONFIG = {
         'aux_dice_weight': 1.0,
         'aux_boundary_weight': 1.0,
         'dice_smooth': 1.0,
+        'boundary_thickness': 1,
+        'aux_boundary_thickness': 1,
     },
     
     # Logging

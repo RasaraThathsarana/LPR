@@ -65,6 +65,7 @@ class Trainer:
             dice_weight=loss_cfg.get('dice_weight', 1.0),
             boundary_weight=loss_cfg.get('boundary_weight', 1.0),
             dice_smooth=loss_cfg.get('dice_smooth', 1.0),
+            boundary_thickness=loss_cfg.get('boundary_thickness', 1),
         )
         self.aux_criterion = CompositeSegmentationLoss(
             ignore_index=loss_cfg.get('ignore_index', 255),
@@ -72,6 +73,7 @@ class Trainer:
             dice_weight=loss_cfg.get('aux_dice_weight', loss_cfg.get('dice_weight', 1.0)),
             boundary_weight=loss_cfg.get('aux_boundary_weight', loss_cfg.get('boundary_weight', 1.0)),
             dice_smooth=loss_cfg.get('dice_smooth', 1.0),
+            boundary_thickness=loss_cfg.get('aux_boundary_thickness', loss_cfg.get('boundary_thickness', 1)),
         )
         self.aux_loss_weight = self.config.get('auxiliary_loss_weight', 0.4)
         

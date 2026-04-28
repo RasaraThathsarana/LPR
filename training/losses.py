@@ -57,35 +57,43 @@ class DiceLoss(nn.Module):
 class BoundaryLoss(nn.Module):
     """Boundary-aware loss based on label edges and soft prediction gradients."""
 
-    def __init__(self, ignore_index: int = 255):
+    def __init__(self, ignore_index: int = 255, boundary_thickness: int = 1):
         super().__init__()
         self.ignore_index = ignore_index
+        self.boundary_thickness = max(1, int(boundary_thickness))
 
     def _target_boundary(self, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         valid = target != self.ignore_index
         safe_target = target.clone()
         safe_target[~valid] = 0
 
-        boundary = torch.zeros_like(safe_target, dtype=torch.bool)
-        boundary_valid = torch.zeros_like(valid, dtype=torch.bool)
+        # Boundary pixels are positions whose label differs from at least one
+        # 4-neighbouring pixel with a valid label.
+        boundary = torch.zeros_like(valid, dtype=torch.bool)
 
         # Horizontal edges
         left_valid = valid[:, :, :-1] & valid[:, :, 1:]
         left_change = safe_target[:, :, :-1] != safe_target[:, :, 1:]
         boundary[:, :, :-1] |= left_change & left_valid
         boundary[:, :, 1:] |= left_change & left_valid
-        boundary_valid[:, :, :-1] |= left_valid
-        boundary_valid[:, :, 1:] |= left_valid
 
         # Vertical edges
         up_valid = valid[:, :-1, :] & valid[:, 1:, :]
         up_change = safe_target[:, :-1, :] != safe_target[:, 1:, :]
         boundary[:, :-1, :] |= up_change & up_valid
         boundary[:, 1:, :] |= up_change & up_valid
-        boundary_valid[:, :-1, :] |= up_valid
-        boundary_valid[:, 1:, :] |= up_valid
 
-        return boundary.float(), boundary_valid
+        if self.boundary_thickness > 1:
+            kernel_size = 2 * self.boundary_thickness - 1
+            boundary = F.max_pool2d(
+                boundary.float().unsqueeze(1),
+                kernel_size=kernel_size,
+                stride=1,
+                padding=self.boundary_thickness - 1,
+            ).squeeze(1) > 0
+
+        # Only supervise where the ground truth is defined.
+        return boundary.float(), valid
 
     def _prediction_boundary(self, logits: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits.float(), dim=1)
@@ -129,6 +137,7 @@ class CompositeSegmentationLoss(nn.Module):
         dice_weight: float = 1.0,
         boundary_weight: float = 1.0,
         dice_smooth: float = 1.0,
+        boundary_thickness: int = 1,
     ):
         super().__init__()
         self.ce_weight = ce_weight
@@ -136,7 +145,7 @@ class CompositeSegmentationLoss(nn.Module):
         self.boundary_weight = boundary_weight
         self.ce = nn.CrossEntropyLoss(ignore_index=ignore_index)
         self.dice = DiceLoss(ignore_index=ignore_index, smooth=dice_smooth)
-        self.boundary = BoundaryLoss(ignore_index=ignore_index)
+        self.boundary = BoundaryLoss(ignore_index=ignore_index, boundary_thickness=boundary_thickness)
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> LossOutput:
         ce_loss = self.ce(logits, target)
