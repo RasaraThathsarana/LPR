@@ -28,6 +28,9 @@ class DiceLoss(nn.Module):
         self.smooth = smooth
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if target.ndim == 4 and target.shape[1] == 1:
+            target = target.squeeze(1)
+
         num_classes = logits.shape[1]
         probs = torch.softmax(logits, dim=1)
 
@@ -62,7 +65,14 @@ class BoundaryLoss(nn.Module):
         self.ignore_index = ignore_index
         self.boundary_thickness = max(1, int(boundary_thickness))
 
+    @staticmethod
+    def _squeeze_target(target: torch.Tensor) -> torch.Tensor:
+        if target.ndim == 4 and target.shape[1] == 1:
+            return target.squeeze(1)
+        return target
+
     def _target_boundary(self, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        target = self._squeeze_target(target)
         valid = target != self.ignore_index
         safe_target = target.clone()
         safe_target[~valid] = 0
@@ -107,14 +117,17 @@ class BoundaryLoss(nn.Module):
         edge_map[:, :, :, 1:] += diff_w
         edge_map[:, :, :, :-1] += diff_w
 
-        # Use raw edge magnitude as logits for an autocast-safe BCE loss.
-        return edge_map
+        # Convert the edge magnitude into a bounded probability-like score.
+        # The maximum L1 difference between two probability vectors is 2, and
+        # each pixel can accumulate horizontal and vertical contributions.
+        return (edge_map / 4.0).clamp_(0.0, 1.0)
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        target = self._squeeze_target(target)
         pred_boundary = self._prediction_boundary(logits)
         target_boundary, boundary_valid = self._target_boundary(target)
 
-        loss = F.binary_cross_entropy_with_logits(
+        loss = F.binary_cross_entropy(
             pred_boundary,
             target_boundary.unsqueeze(1),
             reduction='none',
@@ -148,6 +161,9 @@ class CompositeSegmentationLoss(nn.Module):
         self.boundary = BoundaryLoss(ignore_index=ignore_index, boundary_thickness=boundary_thickness)
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> LossOutput:
+        if target.ndim == 4 and target.shape[1] == 1:
+            target = target.squeeze(1)
+
         ce_loss = self.ce(logits, target)
         dice_loss = self.dice(logits, target)
         boundary_loss = self.boundary(logits, target)
