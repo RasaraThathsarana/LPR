@@ -199,8 +199,8 @@ SWIN_BASE_CONFIG = {
         'encoder': 'swin_base',
         'decoder': 'upernet',
         'adapter': None,
-        'train_encoder': False,
-        'use_auxiliary_decoder': False,
+        'train_encoder': True,
+        'use_auxiliary_decoder': True,
         'name': 'swin_base',
         'pretrained': True,
         'pretrain_path': None,
@@ -292,7 +292,7 @@ SWIN_BASE_LPR_CONFIG = {
     'model': {
         **SWIN_BASE_CONFIG['model'],
         'adapter': 'swinb_lpr_adapter',
-        'train_encoder': False,
+        'train_encoder': True,
         'adapter_kwargs': {
             'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
             'out_channels': 1024,
@@ -330,7 +330,7 @@ SWIN_BASE_LPR_HI_CONFIG = {
     'model': {
         **SWIN_BASE_CONFIG['model'],
         'adapter': None,
-        'train_encoder': False,
+        'train_encoder': True,
         'decoder': 'lpr_hi',
         'decoder_kwargs': {
             # Process all multi-stage features directly from Swin Base
