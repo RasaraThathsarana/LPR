@@ -49,8 +49,21 @@ BASE_CONFIG = {
     # Data loading
     'num_workers': 4,
     'pin_memory': True,
+    'val_batch_size': None,
     
     'accumulation_steps': 1,  # Number of batches to accumulate gradients over
+
+    # Segmentation loss
+    'loss': {
+        'ignore_index': 255,
+        'ce_weight': 1.0,
+        'dice_weight': 1.0,
+        'boundary_weight': 1.0,
+        'aux_ce_weight': 1.0,
+        'aux_dice_weight': 1.0,
+        'aux_boundary_weight': 1.0,
+        'dice_smooth': 1.0,
+    },
     
     # Logging
     'log_interval': 50,
@@ -187,7 +200,7 @@ SWIN_BASE_CONFIG = {
         'decoder': 'upernet',
         'adapter': None,
         'train_encoder': False,
-        'use_auxiliary_decoder': True,
+        'use_auxiliary_decoder': False,
         'name': 'swin_base',
         'pretrained': True,
         'pretrain_path': None,
@@ -199,7 +212,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': True,
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],

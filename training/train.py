@@ -25,6 +25,7 @@ from configs import CONFIG
 from configs.config import DEFAULT_CONFIG_NAME, build_config
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 from datasets.inria_preprocessing.download import ensure_inria_dataset_from_source
+from training.losses import CompositeSegmentationLoss
 
 
 class Trainer:
@@ -57,8 +58,21 @@ class Trainer:
         self.scheduler = self._build_scheduler()
         
         # Setup loss function
-        self.criterion = nn.CrossEntropyLoss(ignore_index=255)
-        self.aux_criterion = nn.CrossEntropyLoss(ignore_index=255)
+        loss_cfg = self.config.get('loss', {})
+        self.criterion = CompositeSegmentationLoss(
+            ignore_index=loss_cfg.get('ignore_index', 255),
+            ce_weight=loss_cfg.get('ce_weight', 1.0),
+            dice_weight=loss_cfg.get('dice_weight', 1.0),
+            boundary_weight=loss_cfg.get('boundary_weight', 1.0),
+            dice_smooth=loss_cfg.get('dice_smooth', 1.0),
+        )
+        self.aux_criterion = CompositeSegmentationLoss(
+            ignore_index=loss_cfg.get('ignore_index', 255),
+            ce_weight=loss_cfg.get('aux_ce_weight', loss_cfg.get('ce_weight', 1.0)),
+            dice_weight=loss_cfg.get('aux_dice_weight', loss_cfg.get('dice_weight', 1.0)),
+            boundary_weight=loss_cfg.get('aux_boundary_weight', loss_cfg.get('boundary_weight', 1.0)),
+            dice_smooth=loss_cfg.get('dice_smooth', 1.0),
+        )
         self.aux_loss_weight = self.config.get('auxiliary_loss_weight', 0.4)
         
         # Setup tensorboard
@@ -321,20 +335,23 @@ class Trainer:
                     autocast_device = 'cuda' if str(self.device).startswith('cuda') else 'cpu'
                     with torch.amp.autocast(autocast_device):
                         outputs, aux_outputs = self.model(imgs, return_aux=True)
-                        loss = self.criterion(outputs, segs)
+                        main_loss = self.criterion(outputs, segs)
+                        loss = main_loss.total
+                        aux_loss = None
                         if aux_outputs is not None:
-                            loss = loss + self.aux_loss_weight * self.aux_criterion(aux_outputs, segs)
-                        
-                        # Scale loss for gradient accumulation
-                        accum_loss = loss / accumulation_steps
-                    
+                            aux_loss = self.aux_criterion(aux_outputs, segs)
+                            loss = loss + self.aux_loss_weight * aux_loss.total
+
+                    # Scale loss for gradient accumulation
+                    accum_loss = loss / accumulation_steps
+
                     # Backward pass (accumulates gradients)
                     self.scaler.scale(accum_loss).backward()
-                    
+
                     # Update metrics
                     forward_passes += 1
                     train_hist = self._update_hist(train_hist, outputs.argmax(dim=1), segs)
-                    
+
                     # Log
                     pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
                     
@@ -352,11 +369,29 @@ class Trainer:
                         
                         # Log to tensorboard every log_interval
                         if self.current_iter % self.config['log_interval'] == 0:
+                            print(
+                                f"\n[Iter {self.current_iter}] "
+                                f"Total Loss: {loss.item():.4f} | "
+                                f"Main CE: {main_loss.ce.item():.4f} | "
+                                f"Main Dice: {main_loss.dice.item():.4f} | "
+                                f"Main Boundary: {main_loss.boundary.item():.4f}"
+                            )
+                            if aux_loss is not None:
+                                print(
+                                    f"[Iter {self.current_iter}] "
+                                    f"Aux CE: {aux_loss.ce.item():.4f} | "
+                                    f"Aux Dice: {aux_loss.dice.item():.4f} | "
+                                    f"Aux Boundary: {aux_loss.boundary.item():.4f} | "
+                                    f"Aux Weighted: {(self.aux_loss_weight * aux_loss.total).item():.4f}"
+                                )
                             self.writer.add_scalar(
                                 'train/loss',
                                 loss.item(),
                                 self.current_iter
                             )
+                            self.writer.add_scalar('train/loss_ce', main_loss.ce.item(), self.current_iter)
+                            self.writer.add_scalar('train/loss_dice', main_loss.dice.item(), self.current_iter)
+                            self.writer.add_scalar('train/loss_boundary', main_loss.boundary.item(), self.current_iter)
                             self.writer.add_scalar(
                                 'train/lr',
                                 self.optimizer.param_groups[0]['lr'],
@@ -475,7 +510,7 @@ def train(args):
     val_loader = create_val_loader(
         config['data_root'],
         VAL_PIPELINE,
-        batch_size=1,
+        batch_size=config['batch_size'],
         dataset_name=dataset_name,
     )
     
