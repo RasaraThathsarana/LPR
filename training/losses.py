@@ -88,7 +88,7 @@ class BoundaryLoss(nn.Module):
         return boundary.float(), boundary_valid
 
     def _prediction_boundary(self, logits: torch.Tensor) -> torch.Tensor:
-        probs = torch.softmax(logits, dim=1)
+        probs = torch.softmax(logits.float(), dim=1)
 
         diff_h = torch.abs(probs[:, :, 1:, :] - probs[:, :, :-1, :]).sum(dim=1, keepdim=True)
         diff_w = torch.abs(probs[:, :, :, 1:] - probs[:, :, :, :-1]).sum(dim=1, keepdim=True)
@@ -99,16 +99,15 @@ class BoundaryLoss(nn.Module):
         edge_map[:, :, :, 1:] += diff_w
         edge_map[:, :, :, :-1] += diff_w
 
-        # Convert edge strength to a soft probability-like signal.
-        return 1.0 - torch.exp(-edge_map)
+        # Use raw edge magnitude as logits for an autocast-safe BCE loss.
+        return edge_map
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_boundary = self._prediction_boundary(logits)
         target_boundary, boundary_valid = self._target_boundary(target)
 
-        eps = 1e-6
-        loss = F.binary_cross_entropy(
-            pred_boundary.clamp(min=eps, max=1.0 - eps),
+        loss = F.binary_cross_entropy_with_logits(
+            pred_boundary,
             target_boundary.unsqueeze(1),
             reduction='none',
         )
