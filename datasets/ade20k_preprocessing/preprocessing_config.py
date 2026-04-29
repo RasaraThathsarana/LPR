@@ -47,10 +47,11 @@ def get_val_pipeline():
 
 # Validation/Test pipeline
 # Note: No augmentation, only resizing and packing
-# Lower the validation resize scale to reduce GPU memory use during full-image evaluation.
+# Lower the validation resize scale to reduce GPU memory use during full-image evaluation,
+# especially for high-resolution decoders like lpr_hi.
 VAL_PIPELINE = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(1024, 512), keep_ratio=True),
+    dict(type='Resize', scale=(768, 384), keep_ratio=True),
     dict(type='LoadAnnotations', reduce_zero_label=True),
     dict(type='PackSegInputs')
 ]
