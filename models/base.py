@@ -68,7 +68,26 @@ class EncoderDecoderModel(SegmentationModel):
         sig = inspect.signature(self.decoder.forward)
         self.pass_img_to_decoder = 'img' in sig.parameters
 
+    def _normalize_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize input tensor with configured mean/std and optional RGB conversion."""
+        if not self.input_norm_cfg:
+            return x
+
+        mean = self.input_norm_cfg.get('mean')
+        std = self.input_norm_cfg.get('std')
+        if mean is None or std is None:
+            return x
+
+        mean_tensor = torch.tensor(mean, dtype=x.dtype, device=x.device).view(1, -1, 1, 1)
+        std_tensor = torch.tensor(std, dtype=x.dtype, device=x.device).view(1, -1, 1, 1)
+
+        if self.input_norm_cfg.get('to_rgb', False) and x.shape[1] == 3:
+            x = x[:, [2, 1, 0], :, :]
+
+        return (x - mean_tensor) / std_tensor
+
     def forward(self, x: torch.Tensor, return_aux: bool = False):
+        x = self._normalize_input(x)
         features = self.encoder(x)
         encoder_features = features
         if self.adapter is not None:
