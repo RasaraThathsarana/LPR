@@ -93,9 +93,18 @@ class LocalPatchAttention(nn.Module):
         return self._forward_impl(q, v)
 
 class LocalPatchRefiner(nn.Module):
-    def __init__(self, in_channels_list: List[int], in_channels: int = 3, hidden_dim: int = 128, cnn_dim: int = 64, use_checkpoint: bool = True):
+    def __init__(
+        self,
+        in_channels_list: List[int],
+        in_channels: int = 3,
+        hidden_dim: int = 128,
+        cnn_dim: int = 64,
+        use_checkpoint: bool = True,
+        use_ppm: bool = True,
+    ):
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.use_ppm = use_ppm
         
         # Extremely lightweight CNN to extract full-resolution (Stride-1) queries
         self.cnn = nn.Sequential(
@@ -125,16 +134,17 @@ class LocalPatchRefiner(nn.Module):
                 )
             )
             
-        # Initialize PPM for the deepest Swin feature map
-        self.ppm = PyramidPoolingModule(in_channels_list[-1])
+        # Initialize PPM for the deepest Swin feature map only when enabled
+        self.ppm = PyramidPoolingModule(in_channels_list[-1]) if use_ppm else None
 
     def forward(self, img, features: List[torch.Tensor]):
         q = self.cnn(img)
         q = q + self.cpe(q)
         
-        # Apply PPM to the deepest feature map (Stride 32)
+        # Apply PPM to the deepest feature map (Stride 32) if enabled
         enhanced_features = list(features)
-        enhanced_features[-1] = self.ppm(enhanced_features[-1])
+        if self.use_ppm:
+            enhanced_features[-1] = self.ppm(enhanced_features[-1])
         
         # Process Bottom-Up (Fine-to-Coarse): Stride 4 -> 8 -> 16 -> 32
         for i, (stage, f) in enumerate(zip(self.stages, enhanced_features)):

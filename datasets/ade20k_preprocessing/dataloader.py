@@ -50,6 +50,51 @@ class ADE20KDataLoader:
     def __len__(self) -> int:
         """Number of batches."""
         return self.num_batches
+
+    @staticmethod
+    def _pad_batch(batch_imgs, batch_segs):
+        """Pad samples in a batch to the same spatial size.
+
+        ADE20K validation uses resize-with-keep-ratio, so image sizes can vary
+        across samples. Padding keeps batching simple while preserving the
+        original content and masking out padded labels with 255.
+        """
+        def spatial_shape(img):
+            # PackSegInputs yields CHW, but keep a fallback for HWC arrays.
+            if img.ndim == 3 and img.shape[0] <= 4 and img.shape[1] > 4:
+                return img.shape[1], img.shape[2], True
+            return img.shape[0], img.shape[1], False
+
+        max_h = 0
+        max_w = 0
+        layouts = []
+        for img in batch_imgs:
+            h, w, is_chw = spatial_shape(img)
+            max_h = max(max_h, h)
+            max_w = max(max_w, w)
+            layouts.append(is_chw)
+
+        padded_imgs = []
+        padded_segs = []
+
+        for img, seg, is_chw in zip(batch_imgs, batch_segs, layouts):
+            h, w = seg.shape[:2]
+
+            if is_chw:
+                c = img.shape[0]
+                padded_img = np.zeros((c, max_h, max_w), dtype=img.dtype)
+                padded_img[:, :img.shape[1], :img.shape[2]] = img
+            else:
+                padded_img = np.zeros((max_h, max_w, img.shape[2]), dtype=img.dtype)
+                padded_img[:img.shape[0], :img.shape[1]] = img
+
+            padded_seg = np.full((max_h, max_w), 255, dtype=seg.dtype)
+            padded_seg[:h, :w] = seg
+
+            padded_imgs.append(padded_img)
+            padded_segs.append(padded_seg)
+
+        return padded_imgs, padded_segs
     
     def __iter__(self):
         """Iterate over batches."""
@@ -74,9 +119,10 @@ class ADE20KDataLoader:
                 
                 batch_imgs.append(processed['img'])
                 batch_segs.append(processed['gt_semantic_seg'])
+
+            batch_imgs, batch_segs = self._pad_batch(batch_imgs, batch_segs)
             
             # Stack to create batch
-            # Note: All images in batch assumed to have same shape
             batch_data = {
                 'img': torch.from_numpy(np.stack(batch_imgs, axis=0)).float(),  # (B, C, H, W)
                 'gt_semantic_seg': torch.from_numpy(np.stack(batch_segs, axis=0)).long(),  # (B, H, W)

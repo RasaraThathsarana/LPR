@@ -118,7 +118,8 @@ def build_model(
     adapter = None
     if adapter_name:
         adapter = build_adapter(adapter_name, **adapter_kwargs)
-    decoder = decoder_module.build_decoder(**decoder_kwargs, num_classes=num_classes)
+    decoder_num_classes = decoder_kwargs.pop('num_classes', num_classes)
+    decoder = decoder_module.build_decoder(**decoder_kwargs, num_classes=decoder_num_classes)
     aux_head = None
     aux_type = decoder_name
     if use_auxiliary_decoder:

@@ -33,7 +33,7 @@ BASE_CONFIG = {
     'num_classes': 150,
     'dataset': 'ade20k',
     'data_root': 'data/ade/ADEChallengeData2016',
-    'crop_size': (512, 512),
+    'crop_size': (224, 224),
     'data_preprocessor': {
         'mean': [123.675, 116.28, 103.53],
         'std': [58.395, 57.12, 57.375],
@@ -43,7 +43,7 @@ BASE_CONFIG = {
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
         'max_iters': 50000,
-        'val_interval': 4100,
+        'val_interval': 4099,
     },
     
     # Data loading
@@ -196,13 +196,13 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 16,
+    'batch_size': 12,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
         'adapter': None,
         'train_encoder': True,
-        'use_auxiliary_decoder': True,
+        'use_auxiliary_decoder': False,
         'name': 'swin_base',
         'pretrained': True,
         'pretrain_path': None,
@@ -233,7 +233,7 @@ SWIN_BASE_CONFIG = {
     },
     'optimizer': {
         'type': 'AdamW',
-        'lr': 1e-4, #6e-5,
+        'lr': 0.0001*12/16, #6e-5,
         'betas': (0.9, 0.999),
         'weight_decay': 0.01,
     },
@@ -339,10 +339,63 @@ SWIN_BASE_LPR_HI_CONFIG = {
             'in_channels': [128, 256, 512, 1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
-                'hidden_dim': 512,
+                'hidden_dim': 256,
                 'cnn_dim': 64,
                 'use_checkpoint': True,
+                'use_ppm': False,
             }
+        },
+        'auxiliary_kwargs': {
+            'type': 'upernet',
+            'in_channels': 512,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
+        },
+    },
+}
+
+# Swin Base with LPR High Resolution Decoder and no final PPM pooling
+SWIN_BASE_LPR_HI_NOPOOL_CONFIG = {
+    **SWIN_BASE_CONFIG,
+    'model': {
+        **SWIN_BASE_LPR_HI_CONFIG['model'],
+        'decoder_kwargs': {
+            **SWIN_BASE_LPR_HI_CONFIG['model']['decoder_kwargs'],
+            'lpr_kwargs': {
+                **SWIN_BASE_LPR_HI_CONFIG['model']['decoder_kwargs']['lpr_kwargs'],
+                'use_ppm': False,
+            },
+        },
+    },
+}
+
+
+# Swin Base with UNet Decoder configuration
+SWIN_BASE_UNET_CONFIG = {
+    **SWIN_BASE_CONFIG,
+    'model': {
+        **SWIN_BASE_CONFIG['model'],
+        'adapter': None,
+        'train_encoder': True,
+        'decoder': 'unet',
+        'decoder_kwargs': {
+            'in_channels': [128, 256, 512, 1024],
+            'decoder_channels': [768, 512, 256], #[512, 256, 128],
+            'num_classes': 150,
+            'num_convs': 3, #2,
+            'dropout_ratio': 0.1,
+            'align_corners': False,
+            'output_scale': 4,
+            'upsample_cfg': {
+                'type': 'InterpConv',
+                'scale_factor': 2,
+                'mode': 'bilinear',
+                'align_corners': False,
+            },
         },
         'auxiliary_kwargs': {
             'type': 'upernet',
@@ -366,6 +419,8 @@ CONFIG = {
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
     'swin_base_lpr_hi': SWIN_BASE_LPR_HI_CONFIG,
+    'swin_base_lpr_hi_nopool': SWIN_BASE_LPR_HI_NOPOOL_CONFIG,
+    'swin_base_unet': SWIN_BASE_UNET_CONFIG,
 }
 
 
@@ -373,7 +428,7 @@ DATASET_PRESETS = {
     'ade20k': {
         'dataset': 'ade20k',
         'data_root': 'data/ade/ADEChallengeData2016',
-        'crop_size': (512, 512),
+        'crop_size': (224, 224),
     },
     'inria': {
         'dataset': 'inria',
@@ -426,6 +481,12 @@ MODEL_DETAILS = {
         'depths': [2, 2, 18, 2],
         'params': '234M',
         'flops': '3230G',
+    },
+    'swin_base_unet': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
     },
 }
 

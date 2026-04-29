@@ -1,14 +1,16 @@
 """
 ADE20K Preprocessing Pipeline Configuration.
 
-This configuration produces the exact same preprocessing as MMSegmentation
-when using the configs/_base_/datasets/ade20k.py configuration.
+This configuration keeps ADE20K preprocessing configurable from the runtime
+config while preserving the same transform structure.
 """
+
+from copy import deepcopy
 
 # Dataset settings
 DATASET_TYPE = 'ADE20KDataset'
 DATA_ROOT = 'data/ade/ADEChallengeData2016'
-CROP_SIZE = (512, 512)
+CROP_SIZE = (224, 224)
 
 # Training pipeline
 # These transforms are applied in order during training
@@ -27,11 +29,28 @@ TRAIN_PIPELINE = [
     dict(type='PackSegInputs')
 ]
 
+
+def get_train_pipeline(crop_size: tuple[int, int] | None = None):
+    """Return a copy of the training pipeline with the requested crop size."""
+    pipeline = deepcopy(TRAIN_PIPELINE)
+    target_crop_size = crop_size or CROP_SIZE
+    for transform in pipeline:
+        if transform.get('type') == 'RandomCrop':
+            transform['crop_size'] = target_crop_size
+            break
+    return pipeline
+
+
+def get_val_pipeline():
+    """Return a copy of the validation pipeline."""
+    return deepcopy(VAL_PIPELINE)
+
 # Validation/Test pipeline
 # Note: No augmentation, only resizing and packing
+# Lower the validation resize scale to reduce GPU memory use during full-image evaluation.
 VAL_PIPELINE = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(2048, 512), keep_ratio=True),
+    dict(type='Resize', scale=(1024, 512), keep_ratio=True),
     dict(type='LoadAnnotations', reduce_zero_label=True),
     dict(type='PackSegInputs')
 ]
@@ -53,14 +72,14 @@ IMG_NORM_CFG = dict(
 # 1. Load RGB image (.jpg) and segmentation map (.png)
 # 2. Reduce zero labels (shift all labels -1, background becomes 255)
 # 3. Random resize: scale to (2048, 512) with ratio 0.5-2.0 keeping aspect ratio
-# 4. Random crop: crop to 512x512 with max 75% of single class
+# 4. Random crop: crop to 224x224 with max 75% of single class
 # 5. Random horizontal flip: 50% probability
 # 6. Photometric distortion: random brightness, contrast, saturation, hue
 # 7. Pack to CHW format for model input
 #
 # Expected output per sample:
-# - img: float32, shape (3, 512, 512)
-# - gt_semantic_seg: int32, shape (512, 512) with values 0-149 (and 255 for ignore)
+# - img: float32, shape (3, 224, 224)
+# - gt_semantic_seg: int32, shape (224, 224) with values 0-149 (and 255 for ignore)
 #
 # Data structure:
 # ===============

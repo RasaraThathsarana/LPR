@@ -173,6 +173,8 @@ class Trainer:
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
         """Validate the model."""
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         self.model.eval()
         
         num_classes = self.config['num_classes']
@@ -480,7 +482,11 @@ def train(args):
     # Ensure dataset is available
     if dataset_name == 'ade20k':
         ensure_ade20k_dataset(config['data_root'], download=args.download_data)
-        from datasets.ade20k_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
+        from datasets.ade20k_preprocessing.preprocessing_config import (
+            VAL_PIPELINE,
+            get_train_pipeline,
+        )
+        TRAIN_PIPELINE = get_train_pipeline(config.get('crop_size'))
     elif dataset_name == 'inria':
         prepared_root = config['data_root']
         raw_root = config.get('raw_data_root', Path(prepared_root).with_name('AerialImageDataset'))
@@ -512,7 +518,7 @@ def train(args):
     val_loader = create_val_loader(
         config['data_root'],
         VAL_PIPELINE,
-        batch_size=config['batch_size'],
+        batch_size=config.get('val_batch_size') or 1,
         dataset_name=dataset_name,
     )
     
