@@ -352,6 +352,12 @@ class Trainer:
         self.optimizer.zero_grad()
         forward_passes = 0
         
+        # Track metrics over the accumulation steps for smoother logging
+        accum_stats = {
+            'loss': 0.0, 'ce': 0.0, 'dice': 0.0, 'boundary': 0.0,
+            'aux_ce': 0.0, 'aux_dice': 0.0, 'aux_boundary': 0.0, 'aux_total': 0.0
+        }
+        
         while self.current_iter < max_iters:
             self.current_epoch += 1
             
@@ -377,6 +383,17 @@ class Trainer:
 
                     # Scale loss for gradient accumulation
                     accum_loss = loss / accumulation_steps
+
+                    # Accumulate metrics for logging
+                    accum_stats['loss'] += loss.item() / accumulation_steps
+                    accum_stats['ce'] += main_loss.ce.item() / accumulation_steps
+                    accum_stats['dice'] += main_loss.dice.item() / accumulation_steps
+                    accum_stats['boundary'] += main_loss.boundary.item() / accumulation_steps
+                    if aux_outputs is not None:
+                        accum_stats['aux_ce'] += aux_loss.ce.item() / accumulation_steps
+                        accum_stats['aux_dice'] += aux_loss.dice.item() / accumulation_steps
+                        accum_stats['aux_boundary'] += aux_loss.boundary.item() / accumulation_steps
+                        accum_stats['aux_total'] += (self.aux_loss_weight * aux_loss.total).item() / accumulation_steps
 
                     # Backward pass (accumulates gradients)
                     self.scaler.scale(accum_loss).backward()
@@ -404,32 +421,38 @@ class Trainer:
                         if self.current_iter % self.config['log_interval'] == 0:
                             print(
                                 f"\n[Iter {self.current_iter}] "
-                                f"Total Loss: {loss.item():.4f} | "
-                                f"Main CE: {main_loss.ce.item():.4f} | "
-                                f"Main Dice: {main_loss.dice.item():.4f} | "
-                                f"Main Boundary: {main_loss.boundary.item():.4f}"
+                                f"Total Loss: {accum_stats['loss']:.4f} | "
+                                f"Main CE: {accum_stats['ce']:.4f} | "
+                                f"Main Dice: {accum_stats['dice']:.4f} | "
+                                f"Main Boundary: {accum_stats['boundary']:.4f}"
                             )
                             if aux_loss is not None:
                                 print(
                                     f"[Iter {self.current_iter}] "
-                                    f"Aux CE: {aux_loss.ce.item():.4f} | "
-                                    f"Aux Dice: {aux_loss.dice.item():.4f} | "
-                                    f"Aux Boundary: {aux_loss.boundary.item():.4f} | "
-                                    f"Aux Weighted: {(self.aux_loss_weight * aux_loss.total).item():.4f}"
+                                    f"Aux CE: {accum_stats['aux_ce']:.4f} | "
+                                    f"Aux Dice: {accum_stats['aux_dice']:.4f} | "
+                                    f"Aux Boundary: {accum_stats['aux_boundary']:.4f} | "
+                                    f"Aux Weighted: {accum_stats['aux_total']:.4f}"
                                 )
                             self.writer.add_scalar(
                                 'train/loss',
-                                loss.item(),
+                                accum_stats['loss'],
                                 self.current_iter
                             )
-                            self.writer.add_scalar('train/loss_ce', main_loss.ce.item(), self.current_iter)
-                            self.writer.add_scalar('train/loss_dice', main_loss.dice.item(), self.current_iter)
-                            self.writer.add_scalar('train/loss_boundary', main_loss.boundary.item(), self.current_iter)
+                            self.writer.add_scalar('train/loss_ce', accum_stats['ce'], self.current_iter)
+                            self.writer.add_scalar('train/loss_dice', accum_stats['dice'], self.current_iter)
+                            self.writer.add_scalar('train/loss_boundary', accum_stats['boundary'], self.current_iter)
                             self.writer.add_scalar(
                                 'train/lr',
                                 self.optimizer.param_groups[0]['lr'],
                                 self.current_iter
                             )
+                            
+                        # Reset stats for the next macro-batch
+                        accum_stats = {
+                            'loss': 0.0, 'ce': 0.0, 'dice': 0.0, 'boundary': 0.0,
+                            'aux_ce': 0.0, 'aux_dice': 0.0, 'aux_boundary': 0.0, 'aux_total': 0.0
+                        }
                         
                         # Validate at specified iteration intervals
                         if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
