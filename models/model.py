@@ -178,7 +178,14 @@ def build_model(
     if pretrained:
         state_dict = None
         if pretrain_path:
-            checkpoint = torch.load(pretrain_path, map_location='cpu')
+            try:
+                checkpoint = torch.load(
+                    pretrain_path,
+                    map_location='cpu',
+                    weights_only=False,
+                )
+            except TypeError:
+                checkpoint = torch.load(pretrain_path, map_location='cpu')
             state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
         elif encoder_name in SWIN_URLS:
             print(f"Auto-downloading Microsoft Official ImageNet weights for {encoder_name}...")

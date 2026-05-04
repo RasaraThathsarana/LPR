@@ -289,7 +289,15 @@ class Trainer:
     
     def load_checkpoint(self, checkpoint_path: str):
         """Load checkpoint."""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        try:
+            checkpoint = torch.load(
+                checkpoint_path,
+                map_location=self.device,
+                weights_only=False,
+            )
+        except TypeError:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
         state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
         new_state_dict = translate_checkpoint_state_dict(state_dict)
         self.model.load_state_dict(new_state_dict, strict=False)
