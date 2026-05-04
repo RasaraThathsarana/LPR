@@ -18,6 +18,8 @@ from pathlib import Path
 from tqdm import tqdm
 from typing import Dict
 import json
+import sys
+import datetime
 
 from models import build_model
 from models.model import translate_checkpoint_state_dict
@@ -26,6 +28,25 @@ from configs.config import DEFAULT_CONFIG_NAME, build_config
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 from datasets.inria_preprocessing.download import ensure_inria_dataset_from_source
 from training.losses import CompositeSegmentationLoss
+
+
+class StdoutLogger:
+    """Custom logger to duplicate stdout to a file."""
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+        
+    def isatty(self):
+        return self.terminal.isatty()
 
 
 class Trainer:
@@ -467,6 +488,12 @@ def worker_init_fn(worker_id):
 def train(args):
     """Main training function."""
     
+    # Setup file logging
+    log_dir = Path(args.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    sys.stdout = StdoutLogger(log_dir / f"train_{timestamp}.log")
+
     # Device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")

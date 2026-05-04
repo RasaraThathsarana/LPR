@@ -33,7 +33,7 @@ BASE_CONFIG = {
     'num_classes': 150,
     'dataset': 'ade20k',
     'data_root': 'data/ade/ADEChallengeData2016',
-    'crop_size': (224, 224),
+    'crop_size': (512, 512),
     'data_preprocessor': {
         'mean': [123.675, 116.28, 103.53],
         'std': [58.395, 57.12, 57.375],
@@ -196,7 +196,7 @@ SWIN_SMALL_CONFIG = {
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 12,
+    'batch_size': 2,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
