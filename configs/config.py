@@ -27,6 +27,10 @@ def _deep_merge_dicts(base: dict, override: dict) -> dict:
     return merged
 
 DEFAULT_CONFIG_NAME = 'swin_base'
+# Global training hyperparameters applied to all models
+GLOBAL_BATCH_SIZE = 2
+GLOBAL_ACCUMULATION_STEPS = 1
+GLOBAL_LEARNING_RATE = 6e-5
 
 # Base configuration common to all variants
 BASE_CONFIG = {
@@ -51,7 +55,8 @@ BASE_CONFIG = {
     'pin_memory': True,
     'val_batch_size': None,
     
-    'accumulation_steps': 1,  # Number of batches to accumulate gradients over
+    'batch_size': GLOBAL_BATCH_SIZE,
+    'accumulation_steps': GLOBAL_ACCUMULATION_STEPS,
 
     # Segmentation loss
     'loss': {
@@ -72,10 +77,10 @@ BASE_CONFIG = {
 
     # Optimizer (default)
     'optimizer': {
-        'type': 'SGD',
-        'lr': 0.01,
-        'momentum': 0.9,
-        'weight_decay': 0.0005,
+        'type': 'AdamW',
+        'lr': GLOBAL_LEARNING_RATE,
+        'betas': (0.9, 0.999),
+        'weight_decay': 0.01,
     },
     
     'scheduler': {
@@ -102,7 +107,6 @@ INRIA_BASE_CONFIG = {
 # Swin Tiny configuration
 SWIN_TINY_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 2,  # 2 per GPU * 4 GPUs (adjust based on your setup)
     'model': {
         'encoder': 'swin_tiny',
         'decoder': 'upernet',
@@ -137,19 +141,12 @@ SWIN_TINY_CONFIG = {
             'align_corners': False,
         },
     },
-    'optimizer': {
-        'type': 'AdamW',
-        'lr': 6e-5,
-        'betas': (0.9, 0.999),
-        'weight_decay': 0.01,
-    },
 }
 
 
 # Swin Small configuration
 SWIN_SMALL_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 8,
     'model': {
         'encoder': 'swin_small',
         'decoder': 'upernet',
@@ -184,19 +181,12 @@ SWIN_SMALL_CONFIG = {
             'align_corners': False,
         },
     },
-    'optimizer': {
-        'type': 'AdamW',
-        'lr': 6e-5,
-        'betas': (0.9, 0.999),
-        'weight_decay': 0.01,
-    },
 }
 
 
 # Swin Base configuration
 SWIN_BASE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 2,
     'model': {
         'encoder': 'swin_base',
         'decoder': 'upernet',
@@ -231,19 +221,12 @@ SWIN_BASE_CONFIG = {
             'align_corners': False,
         },
     },
-    'optimizer': {
-        'type': 'AdamW',
-        'lr': 0.0001*12/16, #6e-5,
-        'betas': (0.9, 0.999),
-        'weight_decay': 0.01,
-    },
 }
 
 
 # Swin Large configuration
 SWIN_LARGE_CONFIG = {
     **BASE_CONFIG,
-    'batch_size': 2,  # Reduce batch size for large model
     'model': {
         'encoder': 'swin_large',
         'decoder': 'upernet',
@@ -278,12 +261,6 @@ SWIN_LARGE_CONFIG = {
             'in_index': 2,
             'align_corners': False,
         },
-    },
-    'optimizer': {
-        'type': 'AdamW',
-        'lr': 6e-5,
-        'betas': (0.9, 0.999),
-        'weight_decay': 0.01,
     },
 }
 
