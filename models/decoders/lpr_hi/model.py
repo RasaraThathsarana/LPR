@@ -6,6 +6,27 @@ from typing import List
 
 from ...base import Decoder
 
+# --- DropPath Implementation ---
+def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
+    if drop_prob == 0. or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
+    if keep_prob > 0.0 and scale_by_keep:
+        random_tensor.div_(keep_prob)
+    return x * random_tensor
+
+class DropPath(nn.Module):
+    def __init__(self, drop_prob: float = 0., scale_by_keep: bool = True):
+        super(DropPath, self).__init__()
+        self.drop_prob = drop_prob
+        self.scale_by_keep = scale_by_keep
+
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
+# -------------------------------
+
 class PyramidPoolingModule(nn.Module):
     def __init__(self, in_channels: int, pool_scales=(1, 2, 3, 6)):
         super().__init__()
@@ -38,7 +59,7 @@ class PyramidPoolingModule(nn.Module):
         return self.bottleneck(torch.cat(psp_outs, dim=1))
 
 class LocalPatchAttention(nn.Module):
-    def __init__(self, q_dim: int, v_dim: int, use_checkpoint: bool = False):
+    def __init__(self, q_dim: int, v_dim: int, use_checkpoint: bool = False, attn_drop: float = 0.1, proj_drop: float = 0.1, drop_path: float = 0.0):
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.q_proj = nn.Linear(q_dim, q_dim)
@@ -48,8 +69,17 @@ class LocalPatchAttention(nn.Module):
         self.q_norm = nn.LayerNorm(q_dim)
         self.v_norm = nn.LayerNorm(v_dim)
 
+        # ViT-style Attention Dropout
+        self.attn_drop = nn.Dropout(attn_drop)
+
         # 3x3 Spatial Convolution to smooth grid artifacts instead of 1x1 Linear
         self.out_proj = nn.Conv2d(v_dim, q_dim, kernel_size=3, padding=1)
+        
+        # ViT-style Projection Dropout
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        # DropPath (Stochastic Depth)
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def _forward_impl(self, q, v):
         # q: (B, C_q, H, W) -> high res (Stride 4)
@@ -77,6 +107,9 @@ class LocalPatchAttention(nn.Module):
         attn_logits = (Q @ K.t()) * (Q.shape[-1] ** -0.5)
         attn_weights = torch.sigmoid(attn_logits)
         
+        # Apply ViT-style Attention Dropout
+        attn_weights = self.attn_drop(attn_weights)
+        
         x_attn = attn_weights * V
         
         # Reconstruct high-res spatial dimensions BEFORE projecting
@@ -85,7 +118,11 @@ class LocalPatchAttention(nn.Module):
         # Apply spatial smoothing
         out = self.out_proj(x_attn_spatial)
 
-        return q + out
+        # Apply ViT-style Projection Dropout
+        out = self.proj_drop(out)
+
+        # Residual connection with DropPath
+        return q + self.drop_path(out)
 
     def forward(self, q, v):
         if self.use_checkpoint and q.requires_grad:
@@ -101,6 +138,10 @@ class LocalPatchRefiner(nn.Module):
         cnn_dim: int = 64,
         use_checkpoint: bool = True,
         use_ppm: bool = True,
+        attn_drop: float = 0.1,
+        proj_drop: float = 0.1,
+        drop_path_rate: float = 0.1,
+        ppm_dropout: float = 0.2,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -124,18 +165,27 @@ class LocalPatchRefiner(nn.Module):
             nn.ReLU(inplace=True)
         )
         
+        # Stochastic depth decay rule
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, len(in_channels_list))]
+
         self.stages = nn.ModuleList()
-        for v_dim in in_channels_list:
+        for i, v_dim in enumerate(in_channels_list):
             self.stages.append(
                 LocalPatchAttention(
                     q_dim=hidden_dim, 
                     v_dim=v_dim, 
-                    use_checkpoint=use_checkpoint
+                    use_checkpoint=use_checkpoint,
+                    attn_drop=attn_drop,
+                    proj_drop=proj_drop,
+                    drop_path=dpr[i]
                 )
             )
             
         # Initialize PPM for the deepest Swin feature map only when enabled
         self.ppm = PyramidPoolingModule(in_channels_list[-1]) if use_ppm else None
+
+        # Spatial Dropout after PPM
+        self.ppm_dropout = nn.Dropout2d(ppm_dropout) if use_ppm else nn.Identity()
 
     def forward(self, img, features: List[torch.Tensor]):
         q = self.cnn(img)
@@ -144,7 +194,7 @@ class LocalPatchRefiner(nn.Module):
         # Apply PPM to the deepest feature map (Stride 32) if enabled
         enhanced_features = list(features)
         if self.use_ppm:
-            enhanced_features[-1] = self.ppm(enhanced_features[-1])
+            enhanced_features[-1] = self.ppm_dropout(self.ppm(enhanced_features[-1]))
         
         # Process Bottom-Up (Fine-to-Coarse): Stride 4 -> 8 -> 16 -> 32
         for i, (stage, f) in enumerate(zip(self.stages, enhanced_features)):
@@ -153,10 +203,9 @@ class LocalPatchRefiner(nn.Module):
             h_q, w_q = q.shape[2:]
             
             # Ensure Q perfectly matches F's grid scaled by relative patch ratio
-            # Swin features have strides 4, 8, 16, 32. Q is stride 1.
-            # Therefore, the resolution ratio is 4 * (2 ** i)
-            ratio = 4 * (2 ** i)
-            target_h, target_w = h_f * ratio, w_f * ratio
+            ratio_h = max(1, round(h_q / h_f))
+            ratio_w = max(1, round(w_q / w_f))
+            target_h, target_w = h_f * ratio_h, w_f * ratio_w
             
             pad_h = target_h - h_q
             pad_w = target_w - w_q
@@ -181,6 +230,9 @@ class LocalPatchRefiner(nn.Module):
 class LPRHiDecoder(Decoder):
     def __init__(self, in_channels: List[int], num_classes: int, lpr_kwargs: dict):
         super().__init__()
+        # Extract spatial dropout safely or default to 0.2
+        spatial_dropout = lpr_kwargs.pop('spatial_dropout', 0.2)
+        
         self.refiner = LocalPatchRefiner(in_channels_list=in_channels, **lpr_kwargs)
         
         hidden_dim = self.refiner.hidden_dim
@@ -189,7 +241,7 @@ class LPRHiDecoder(Decoder):
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Dropout2d(0.1),
+            nn.Dropout2d(spatial_dropout), # Applied Spatial Dropout Regularization
             nn.Conv2d(hidden_dim, num_classes, kernel_size=1)
         )
         
