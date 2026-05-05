@@ -22,7 +22,10 @@ import sys
 import datetime
 
 from models import build_model
-from models.model import translate_checkpoint_state_dict
+from models.model import (
+    extract_state_dict_from_checkpoint,
+    translate_checkpoint_state_dict,
+)
 from configs import CONFIG
 from configs.config import DEFAULT_CONFIG_NAME, build_config
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
@@ -108,6 +111,17 @@ class Trainer:
         self.current_iter = 0
         self.current_epoch = 0
         self.best_miou = 0.0
+        
+        # Early stopping state
+        self.es_cfg = self.config.get('early_stopping', {})
+        self.es_enabled = self.es_cfg.get('enabled', False)
+        self.es_patience = self.es_cfg.get('patience', 5)
+        self.es_min_delta = self.es_cfg.get('min_delta', 0.001)
+        self.es_monitor = self.es_cfg.get('monitor', 'loss')
+        self.es_mode = self.es_cfg.get('mode', 'min')
+        self.es_counter = 0
+        self.es_best = float('inf') if self.es_mode == 'min' else float('-inf')
+        self.stop_training = False
     
     def _build_optimizer(self) -> optim.Optimizer:
         """Build optimizer from config."""
@@ -148,8 +162,43 @@ class Trainer:
     
     def _build_scheduler(self):
         """Build learning rate scheduler from config."""
-        total_iters = self.config['train_cfg']['max_iters']
         sched_cfg = self.config.get('scheduler', {})
+        sched_type = sched_cfg.get('type', 'poly')
+        
+        if sched_type == 'plateau':
+            class WarmupPlateauLR:
+                def __init__(self, optimizer, sched_cfg):
+                    self.optimizer = optimizer
+                    self.warmup_iters = sched_cfg.get('warmup_iters', 1500)
+                    self.warmup_ratio = sched_cfg.get('warmup_ratio', 1e-6)
+                    self.base_lrs = [group['lr'] for group in optimizer.param_groups]
+                    self.plateau = optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer,
+                        mode=sched_cfg.get('mode', 'min'),
+                        factor=sched_cfg.get('factor', 0.5),
+                        patience=sched_cfg.get('patience', 5),
+                        min_lr=sched_cfg.get('min_lr', 1e-6),
+                    )
+                    self.current_iter = 0
+
+                def step(self, current_iter):
+                    self.current_iter = current_iter
+                    if self.warmup_iters > 0 and current_iter < self.warmup_iters:
+                        alpha = current_iter / max(1, self.warmup_iters)
+                        factor = self.warmup_ratio + (1.0 - self.warmup_ratio) * alpha
+                        for base_lr, param_group in zip(self.base_lrs, self.optimizer.param_groups):
+                            param_group['lr'] = base_lr * factor
+                    elif self.warmup_iters > 0 and current_iter == self.warmup_iters:
+                        for base_lr, param_group in zip(self.base_lrs, self.optimizer.param_groups):
+                            param_group['lr'] = base_lr
+
+                def step_metric(self, metric):
+                    if self.current_iter >= self.warmup_iters:
+                        self.plateau.step(metric)
+                        
+            return WarmupPlateauLR(self.optimizer, sched_cfg)
+            
+        total_iters = self.config['train_cfg']['max_iters']
         
         class WarmupPolyLR:
             def __init__(
@@ -194,53 +243,113 @@ class Trainer:
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
         """Validate the model."""
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        was_training = self.model.training
         self.model.eval()
         
         num_classes = self.config['num_classes']
         hist = np.zeros((num_classes, num_classes))
+        total_loss = 0.0
+        num_batches = 0
         
-        with tqdm(self.val_loader, desc='Validating') as pbar:
-            for batch_data in pbar:
-                imgs = batch_data['img'].to(self.device)
-                segs = batch_data['gt_semantic_seg'].to(self.device)
-                
-                # Forward pass
-                outputs = self.model(imgs)  # (B, num_classes, H, W)
-                
-                # Get predictions
-                preds = outputs.argmax(dim=1)  # (B, H, W)
-                
-                # Compute confusion matrix
-                for pred, seg in zip(preds, segs):
-                    pred = pred.cpu().numpy()
-                    seg = seg.cpu().numpy()
-
-                    # Resize prediction to match ground truth shape if needed
-                    if pred.shape != seg.shape:
-                        if pred.shape[0] >= seg.shape[0] and pred.shape[1] >= seg.shape[1]:
-                            pred = pred[:seg.shape[0], :seg.shape[1]]
-                        else:
-                            pred = cv2.resize(
-                                pred.astype(np.uint8),
-                                (seg.shape[1], seg.shape[0]),
-                                interpolation=cv2.INTER_NEAREST
-                            )
-
-                    pred = pred.flatten()
-                    seg = seg.flatten()
+        try:
+            with tqdm(self.val_loader, desc='Validating') as pbar:
+                for batch_data in pbar:
+                    imgs = batch_data['img'].to(self.device)
+                    segs = batch_data['gt_semantic_seg'].to(self.device)
                     
-                    # Ignore label 255
-                    mask = seg != 255
+                    # Forward pass
+                    outputs = self.model(imgs)  # (B, num_classes, H, W)
+                    loss = self.criterion(outputs, segs).total
+                    total_loss += loss.item()
+                    num_batches += 1
                     
-                    hist += self._compute_hist(pred[mask], seg[mask], num_classes)
+                    # Get predictions
+                    preds = outputs.argmax(dim=1)  # (B, H, W)
+                    
+                    if preds.shape == segs.shape:
+                        preds_np = preds.cpu().numpy().flatten()
+                        segs_np = segs.cpu().numpy().flatten()
+                        mask = segs_np != 255
+                        hist += self._compute_hist(preds_np[mask], segs_np[mask], num_classes)
+                    else:
+                        # Compute confusion matrix
+                        for pred, seg in zip(preds, segs):
+                            pred = pred.cpu().numpy()
+                            seg = seg.cpu().numpy()
         
-        # Compute metrics
-        metrics = self._compute_miou(hist)
+                            # Resize prediction to match ground truth shape if needed
+                            if pred.shape != seg.shape:
+                                if pred.shape[0] >= seg.shape[0] and pred.shape[1] >= seg.shape[1]:
+                                    pred = pred[:seg.shape[0], :seg.shape[1]]
+                                else:
+                                    pred = cv2.resize(
+                                        pred.astype(np.uint8),
+                                        (seg.shape[1], seg.shape[0]),
+                                        interpolation=cv2.INTER_NEAREST
+                                    )
         
+                            pred = pred.flatten()
+                            seg = seg.flatten()
+                            
+                            # Ignore label 255
+                            mask = seg != 255
+                            
+                            hist += self._compute_hist(pred[mask], seg[mask], num_classes)
+            
+            # Compute metrics
+            metrics = self._compute_miou(hist)
+            metrics['loss'] = total_loss / num_batches if num_batches > 0 else 0.0
+            
+        finally:
+            if was_training:
+                self.model.train()
+                
         return metrics
     
+    def _check_early_stopping(self, metrics: Dict[str, float]) -> bool:
+        if not self.es_enabled:
+            return False
+            
+        if self.es_monitor not in metrics:
+            raise ValueError(f"Early stopping monitor metric '{self.es_monitor}' not found in metrics. Available metrics: {list(metrics.keys())}")
+            
+        current_metric = metrics[self.es_monitor]
+        current_lr = self.optimizer.param_groups[0]['lr']
+        
+        if not hasattr(self, 'last_lr'):
+            self.last_lr = current_lr
+            
+        if self.es_cfg.get('reset_on_lr_drop', False):
+            # Reset counter if LR has decreased
+            if current_lr < self.last_lr - 1e-8:
+                print(f"Learning rate reduced to {current_lr:.2e}. Resetting early stopping counter.")
+                self.last_lr = current_lr
+                self.es_counter = 0
+            
+        if self.es_mode == 'min':
+            improved = current_metric < (self.es_best - self.es_min_delta)
+        else:
+            improved = current_metric > (self.es_best + self.es_min_delta)
+            
+        if improved:
+            self.es_best = current_metric
+            self.es_counter = 0
+        else:
+            self.es_counter += 1
+            print(f"Early stopping counter: {self.es_counter} out of {self.es_patience} (at LR {current_lr:.2e})")
+            
+            if self.es_counter >= self.es_patience:
+                if self.es_cfg.get('stop_on_min_lr', False):
+                    min_lr = self.config.get('scheduler', {}).get('min_lr', 1e-6)
+                    if current_lr <= min_lr + 1e-8:
+                        print(f"Learning rate is at minimum ({min_lr}) and no improvement for {self.es_patience} rounds. Stopping training.")
+                        return True
+                else:
+                    print("Early stopping triggered!")
+                    return True
+                
+        return False
+
     def _compute_hist(self, pred, true, num_classes):
         """Compute confusion matrix."""
         hist = np.bincount(num_classes * true + pred, minlength=num_classes ** 2)
@@ -282,11 +391,17 @@ class Trainer:
     def _update_hist(self, hist: np.ndarray, preds: torch.Tensor, segs: torch.Tensor) -> np.ndarray:
         """Update confusion matrix histogram from model predictions."""
         num_classes = self.config['num_classes']
-        for pred, seg in zip(preds, segs):
-            pred = pred.cpu().numpy().flatten()
-            seg = seg.cpu().numpy().flatten()
-            mask = seg != 255
-            hist += self._compute_hist(pred[mask], seg[mask], num_classes)
+        if preds.shape == segs.shape:
+            preds_np = preds.cpu().numpy().flatten()
+            segs_np = segs.cpu().numpy().flatten()
+            mask = segs_np != 255
+            hist += self._compute_hist(preds_np[mask], segs_np[mask], num_classes)
+        else:
+            for pred, seg in zip(preds, segs):
+                pred = pred.cpu().numpy().flatten()
+                seg = seg.cpu().numpy().flatten()
+                mask = seg != 255
+                hist += self._compute_hist(pred[mask], seg[mask], num_classes)
         return hist
     
     def save_checkpoint(self, is_best: bool = False):
@@ -299,8 +414,15 @@ class Trainer:
             'config': self.config,
             'best_miou': self.best_miou,
             'scaler': self.scaler.state_dict(),
+            'es_counter': self.es_counter,
+            'es_best': self.es_best,
         }
+        if hasattr(self, 'last_lr'):
+            checkpoint['last_lr'] = self.last_lr
         
+        if hasattr(self.scheduler, 'plateau'):
+            checkpoint['scheduler'] = self.scheduler.plateau.state_dict()
+            
         path = self.checkpoint_dir / 'last_model.pth'
         torch.save(checkpoint, str(path))
         
@@ -319,9 +441,14 @@ class Trainer:
         except TypeError:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-        state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+        state_dict = extract_state_dict_from_checkpoint(checkpoint)
         new_state_dict = translate_checkpoint_state_dict(state_dict)
-        self.model.load_state_dict(new_state_dict, strict=False)
+        missing_keys, unexpected_keys = self.model.load_state_dict(new_state_dict, strict=False)
+        if missing_keys or unexpected_keys:
+            print(
+                f"Warning: Loaded checkpoint with {len(missing_keys)} missing keys "
+                f"and {len(unexpected_keys)} unexpected keys."
+            )
         
         if 'optimizer' in checkpoint:
             try:
@@ -336,6 +463,14 @@ class Trainer:
             self.best_miou = checkpoint['best_miou']
         if 'scaler' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler'])
+        if 'es_counter' in checkpoint:
+            self.es_counter = checkpoint['es_counter']
+        if 'es_best' in checkpoint:
+            self.es_best = checkpoint['es_best']
+        if 'last_lr' in checkpoint:
+            self.last_lr = checkpoint['last_lr']
+        if 'scheduler' in checkpoint and hasattr(self.scheduler, 'plateau'):
+            self.scheduler.plateau.load_state_dict(checkpoint['scheduler'])
     
     def train(self):
         """Train the model with iteration-based validation."""
@@ -358,13 +493,13 @@ class Trainer:
             'aux_ce': 0.0, 'aux_dice': 0.0, 'aux_boundary': 0.0, 'aux_total': 0.0
         }
         
-        while self.current_iter < max_iters:
+        while self.current_iter < max_iters and not self.stop_training:
             self.current_epoch += 1
             
             with tqdm(self.train_loader, desc=f'Epoch {self.current_epoch}') as pbar:
                 for batch_data in pbar:
-                    # Stop if we've reached max iterations
-                    if self.current_iter >= max_iters:
+                    # Stop if we've reached max iterations or early stopped
+                    if self.current_iter >= max_iters or self.stop_training:
                         break
                     
                     imgs = batch_data['img'].to(self.device)
@@ -384,23 +519,23 @@ class Trainer:
                     # Scale loss for gradient accumulation
                     accum_loss = loss / accumulation_steps
 
-                    # Accumulate metrics for logging
-                    accum_stats['loss'] += loss.item() / accumulation_steps
-                    accum_stats['ce'] += main_loss.ce.item() / accumulation_steps
-                    accum_stats['dice'] += main_loss.dice.item() / accumulation_steps
-                    accum_stats['boundary'] += main_loss.boundary.item() / accumulation_steps
+                    # Accumulate metrics for logging (will be averaged over macro-batch)
+                    accum_stats['loss'] += loss.item()
+                    accum_stats['ce'] += main_loss.ce.item()
+                    accum_stats['dice'] += main_loss.dice.item()
+                    accum_stats['boundary'] += main_loss.boundary.item()
                     if aux_outputs is not None:
-                        accum_stats['aux_ce'] += aux_loss.ce.item() / accumulation_steps
-                        accum_stats['aux_dice'] += aux_loss.dice.item() / accumulation_steps
-                        accum_stats['aux_boundary'] += aux_loss.boundary.item() / accumulation_steps
-                        accum_stats['aux_total'] += (self.aux_loss_weight * aux_loss.total).item() / accumulation_steps
+                        accum_stats['aux_ce'] += aux_loss.ce.item()
+                        accum_stats['aux_dice'] += aux_loss.dice.item()
+                        accum_stats['aux_boundary'] += aux_loss.boundary.item()
+                        accum_stats['aux_total'] += (self.aux_loss_weight * aux_loss.total).item()
 
                     # Backward pass (accumulates gradients)
                     self.scaler.scale(accum_loss).backward()
 
                     # Update metrics
                     forward_passes += 1
-                    train_hist = self._update_hist(train_hist, outputs.argmax(dim=1), segs)
+                    train_hist = self._update_hist(train_hist, outputs.detach().argmax(dim=1), segs)
 
                     # Log
                     pbar.set_postfix({'loss': f'{loss.item():.4f}', 'iter': self.current_iter})
@@ -413,40 +548,55 @@ class Trainer:
                         self.scaler.update()
                         self.optimizer.zero_grad()
                         
-                        # Update scheduler and true iteration count
-                        self.scheduler.step(self.current_iter)
+                        # Update true iteration count and scheduler
                         self.current_iter += 1
+                        if hasattr(self.scheduler, 'step'):
+                            self.scheduler.step(self.current_iter)
                         
                         # Log to tensorboard every log_interval
                         if self.current_iter % self.config['log_interval'] == 0:
+                            loss_avg = accum_stats['loss'] / accumulation_steps
+                            ce_avg = accum_stats['ce'] / accumulation_steps
+                            dice_avg = accum_stats['dice'] / accumulation_steps
+                            bound_avg = accum_stats['boundary'] / accumulation_steps
                             print(
                                 f"\n[Iter {self.current_iter}] "
-                                f"Total Loss: {accum_stats['loss']:.4f} | "
-                                f"Main CE: {accum_stats['ce']:.4f} | "
-                                f"Main Dice: {accum_stats['dice']:.4f} | "
-                                f"Main Boundary: {accum_stats['boundary']:.4f}"
+                                f"Total Loss: {loss_avg:.4f} | "
+                                f"Main CE: {ce_avg:.4f} | "
+                                f"Main Dice: {dice_avg:.4f} | "
+                                f"Main Boundary: {bound_avg:.4f}"
                             )
                             if aux_loss is not None:
+                                aux_ce_avg = accum_stats['aux_ce'] / accumulation_steps
+                                aux_dice_avg = accum_stats['aux_dice'] / accumulation_steps
+                                aux_bound_avg = accum_stats['aux_boundary'] / accumulation_steps
+                                aux_total_avg = accum_stats['aux_total'] / accumulation_steps
                                 print(
                                     f"[Iter {self.current_iter}] "
-                                    f"Aux CE: {accum_stats['aux_ce']:.4f} | "
-                                    f"Aux Dice: {accum_stats['aux_dice']:.4f} | "
-                                    f"Aux Boundary: {accum_stats['aux_boundary']:.4f} | "
-                                    f"Aux Weighted: {accum_stats['aux_total']:.4f}"
+                                    f"Aux CE: {aux_ce_avg:.4f} | "
+                                    f"Aux Dice: {aux_dice_avg:.4f} | "
+                                    f"Aux Boundary: {aux_bound_avg:.4f} | "
+                                    f"Aux Weighted: {aux_total_avg:.4f}"
                                 )
                             self.writer.add_scalar(
                                 'train/loss',
-                                accum_stats['loss'],
+                                loss_avg,
                                 self.current_iter
                             )
-                            self.writer.add_scalar('train/loss_ce', accum_stats['ce'], self.current_iter)
-                            self.writer.add_scalar('train/loss_dice', accum_stats['dice'], self.current_iter)
-                            self.writer.add_scalar('train/loss_boundary', accum_stats['boundary'], self.current_iter)
+                            self.writer.add_scalar('train/loss_ce', ce_avg, self.current_iter)
+                            self.writer.add_scalar('train/loss_dice', dice_avg, self.current_iter)
+                            self.writer.add_scalar('train/loss_boundary', bound_avg, self.current_iter)
                             self.writer.add_scalar(
                                 'train/lr',
                                 self.optimizer.param_groups[0]['lr'],
                                 self.current_iter
                             )
+                            
+                            # Log training metrics and reset histogram for unbiased logging
+                            train_metrics = self._compute_miou(train_hist)
+                            self.writer.add_scalar('train/mIoU', train_metrics['mIoU'], self.current_iter)
+                            self.writer.add_scalar('train/mAcc', train_metrics['mAcc'], self.current_iter)
+                            train_hist = np.zeros((num_classes, num_classes))
                             
                         # Reset stats for the next macro-batch
                         accum_stats = {
@@ -456,19 +606,24 @@ class Trainer:
                         
                         # Validate at specified iteration intervals
                         if self.current_iter % val_interval_iters == 0 or self.current_iter >= max_iters:
-                            train_metrics = self._compute_miou(train_hist)
-                            print(f"\n[Iter {self.current_iter}] Train mIoU: {train_metrics['mIoU']:.4f}, Train mAcc: {train_metrics['mAcc']:.4f}")
-                            
-                            print(f"[Iter {self.current_iter}] Running validation...")
+                            print(f"\n[Iter {self.current_iter}] Running validation...")
                             metrics = self.validate()
-                            print(f"[Iter {self.current_iter}] Val mIoU: {metrics['mIoU']:.4f}, Val mAcc: {metrics['mAcc']:.4f}\n")
+                            print(f"[Iter {self.current_iter}] Val mIoU: {metrics['mIoU']:.4f}, Val mAcc: {metrics['mAcc']:.4f}, Val Loss: {metrics['loss']:.4f}\n")
+                            
+                            # Step plateau scheduler
+                            if hasattr(self.scheduler, 'step_metric'):
+                                metric_to_track = metrics['loss'] if self.config['scheduler'].get('mode', 'min') == 'min' else metrics['mIoU']
+                                self.scheduler.step_metric(metric_to_track)
                             
                             # Log metrics
-                            self.writer.add_scalar('train/mIoU', train_metrics['mIoU'], self.current_iter)
-                            self.writer.add_scalar('train/mAcc', train_metrics['mAcc'], self.current_iter)
                             self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
                             self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
+                            self.writer.add_scalar('val/loss', metrics['loss'], self.current_iter)
                             
+                            # Check early stopping (run before saving so states are correctly updated)
+                            if self._check_early_stopping(metrics):
+                                self.stop_training = True
+
                             # Save checkpoint
                             is_best = metrics['mIoU'] > self.best_miou
                             if is_best:
@@ -477,11 +632,8 @@ class Trainer:
                             else:
                                 self.save_checkpoint()
                             
-                            # Reset training histogram after logging
-                            train_hist = np.zeros((num_classes, num_classes))
-                            
-                            # Resume training mode
-                            self.model.train()
+                            if self.stop_training:
+                                break
         
         print("Training completed!")
         self.writer.close()
@@ -565,6 +717,14 @@ def train(args):
     # Import data loading utilities
     from datasets import create_train_loader, create_val_loader
     
+    # Dataloader arguments for reproducibility
+    dl_kwargs = {}
+    if args.seed is not None:
+        g = torch.Generator()
+        g.manual_seed(args.seed)
+        dl_kwargs['worker_init_fn'] = worker_init_fn
+        dl_kwargs['generator'] = g
+        
     # Create data loaders
     print("Creating data loaders...")
     train_loader = create_train_loader(
@@ -572,24 +732,17 @@ def train(args):
         TRAIN_PIPELINE,
         batch_size=config['batch_size'],
         dataset_name=dataset_name,
+        **dl_kwargs
     )
     val_loader = create_val_loader(
         config['data_root'],
         VAL_PIPELINE,
         batch_size=config.get('val_batch_size') or 1,
         dataset_name=dataset_name,
+        **dl_kwargs
     )
     
     print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
-    
-    if args.seed is not None:
-        # Ensure reproducibility in multiprocessing workers
-        train_loader.worker_init_fn = worker_init_fn
-        val_loader.worker_init_fn = worker_init_fn
-        g = torch.Generator()
-        g.manual_seed(args.seed)
-        train_loader.generator = g
-        val_loader.generator = g
     
     # Build model
     print("Building model...")

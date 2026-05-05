@@ -12,14 +12,12 @@ TRAIN_PIPELINE = [
     dict(type='LoadAnnotations'),
     dict(type='RandomFlip', prob=0.5),
     dict(type='PhotoMetricDistortion'),
-    dict(type='Normalize', mean=(123.675, 116.28, 103.53), std=(58.395, 57.12, 57.375), to_rgb=False),
     dict(type='PackSegInputs'),
 ]
 
 VAL_PIPELINE = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    dict(type='Normalize', mean=(123.675, 116.28, 103.53), std=(58.395, 57.12, 57.375), to_rgb=False),
     dict(type='PackSegInputs'),
 ]
 

@@ -86,7 +86,8 @@ class SegmentationMetrics:
     
     def compute_pxa(self) -> float:
         """Compute pixel-wise Accuracy."""
-        return np.trace(self.hist) / self.hist.sum()
+        total = self.hist.sum()
+        return np.trace(self.hist) / total if total > 0 else np.nan
     
     def compute_all_metrics(self) -> Dict[str, float]:
         """Compute all metrics."""

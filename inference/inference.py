@@ -13,7 +13,10 @@ from PIL import Image
 import cv2
 
 from models import build_model
-from models.model import translate_checkpoint_state_dict
+from models.model import (
+    extract_state_dict_from_checkpoint,
+    translate_checkpoint_state_dict,
+)
 from datasets import ADE20KDataset, InriaAerialImageDataset
 from datasets.ade20k_preprocessing.download import ensure_ade20k_dataset
 from datasets.inria_preprocessing.download import ensure_inria_dataset_from_source
@@ -41,11 +44,12 @@ class SegmentationInferencer:
         use_auxiliary_decoder: bool = True,
         auxiliary_kwargs: dict = None,
         input_norm_cfg: dict = None,
+        dataset_name: str = 'ade20k',
         device: str = 'cuda',
     ):
         self.device = device
         self.num_classes = num_classes
-        self.dataset_name = None
+        self.dataset_name = (dataset_name or 'ade20k').lower()
         self.tile_size = 224
         self.large_image_threshold = 512
         
@@ -68,7 +72,6 @@ class SegmentationInferencer:
             pretrained=False,
         ).to(device)
 
-        self.dataset_name = input_norm_cfg.get('dataset', 'ade20k')
         if self.dataset_name == 'inria':
             self.pipeline = build_pipeline(INRIA_VAL_PIPELINE)
             self.tile_size = 224
@@ -90,15 +93,7 @@ class SegmentationInferencer:
             )
         except TypeError:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        
-        # 1. Look for 'state_dict' which MMSegmentation uses
-        if 'state_dict' in checkpoint:
-            state_dict = checkpoint['state_dict']
-        elif 'model' in checkpoint:
-            state_dict = checkpoint['model']
-        else:
-            state_dict = checkpoint
-        
+        state_dict = extract_state_dict_from_checkpoint(checkpoint)
         new_state_dict = translate_checkpoint_state_dict(state_dict)
         missing_keys, unexpected_keys = self.model.load_state_dict(new_state_dict, strict=False)
         
@@ -193,7 +188,6 @@ class SegmentationInferencer:
             img_tensor = torch.from_numpy(processed['img']).unsqueeze(0).to(self.device)
             output = self.model(img_tensor)
             pred = output.argmax(dim=1)[0].cpu().numpy()
-            predictions.append(pred)
             
             if original_gt is not None:
                 # The pipeline evaluates against the original unresized ground truth size
@@ -203,6 +197,7 @@ class SegmentationInferencer:
                     else:
                         pred = cv2.resize(pred.astype(np.uint8), (original_gt.shape[1], original_gt.shape[0]), interpolation=cv2.INTER_NEAREST)
                 metrics.update(pred, original_gt)
+            predictions.append(pred)
         
         return {
             'predictions': predictions,
@@ -332,7 +327,7 @@ if __name__ == '__main__':
         use_auxiliary_decoder = cfg['model'].get('use_auxiliary_decoder', True)
         auxiliary_kwargs = cfg['model'].get('auxiliary_kwargs', {})
         input_norm_cfg = cfg.get('data_preprocessor', {})
-        input_norm_cfg = {**input_norm_cfg, 'dataset': cfg.get('dataset', 'ade20k')}
+        dataset_name = cfg.get('dataset', 'ade20k')
     else:
         encoder_name = args.encoder
         encoder_kwargs = {}
@@ -340,6 +335,7 @@ if __name__ == '__main__':
         use_auxiliary_decoder = True
         auxiliary_kwargs = {}
         input_norm_cfg = {}
+        dataset_name = (args.dataset or 'ade20k').lower()
     
     # Create inferencer
     inferencer = SegmentationInferencer(
@@ -352,11 +348,11 @@ if __name__ == '__main__':
         use_auxiliary_decoder=use_auxiliary_decoder,
         auxiliary_kwargs=auxiliary_kwargs,
         input_norm_cfg=input_norm_cfg,
+        dataset_name=dataset_name,
         device=args.device,
     )
     
     # Get palette for visualization
-    dataset_name = cfg.get('dataset', 'ade20k') if args.encoder in CONFIG else 'ade20k'
     palette = InriaAerialImageDataset.get_palette() if dataset_name == 'inria' else ADE20KDataset.get_palette()
     
     if args.image:

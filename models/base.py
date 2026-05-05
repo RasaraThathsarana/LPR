@@ -87,6 +87,7 @@ class EncoderDecoderModel(SegmentationModel):
         return (x - mean_tensor) / std_tensor
 
     def forward(self, x: torch.Tensor, return_aux: bool = False):
+        input_shape = x.shape[2:]
         x = self._normalize_input(x)
         features = self.encoder(x)
         encoder_features = features
@@ -97,11 +98,21 @@ class EncoderDecoderModel(SegmentationModel):
             out = self.decoder(features, img=x)
         else:
             out = self.decoder(features)
+            
+        align_corners = getattr(self.decoder, 'align_corners', False)
+        if out.shape[2:] != input_shape:
+            out = torch.nn.functional.interpolate(
+                out, size=input_shape, mode='bilinear', align_corners=align_corners
+            )
+            
         if return_aux and self.aux_head is not None:
             aux_out = self.aux_head(encoder_features)
+            aux_align_corners = getattr(self.aux_head, 'align_corners', False)
             # Ensure auxiliary output matches input spatial dimensions
-            if aux_out.shape[2:] != x.shape[2:]:
-                aux_out = torch.nn.functional.interpolate(aux_out, size=x.shape[2:], mode='bilinear', align_corners=False)
+            if aux_out.shape[2:] != input_shape:
+                aux_out = torch.nn.functional.interpolate(
+                    aux_out, size=input_shape, mode='bilinear', align_corners=aux_align_corners
+                )
             return out, aux_out
         elif return_aux:
             return out, None

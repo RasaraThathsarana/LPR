@@ -51,6 +51,16 @@ def translate_checkpoint_state_dict(state_dict: dict) -> dict:
     is_pure_backbone = any(k.startswith('patch_embed.') or k.startswith('layers.') for k in state_dict.keys())
     
     for k, v in state_dict.items():
+        while True:
+            if k.startswith('model.module.'):
+                k = k[len('model.module.'):]
+            elif k.startswith('module.'):
+                k = k[len('module.'):]
+            elif k.startswith('model.'):
+                k = k[len('model.'):]
+            else:
+                break
+
         if k.startswith('auxiliary_head') or k.startswith('head.'):
             continue
             
@@ -75,6 +85,16 @@ def translate_checkpoint_state_dict(state_dict: dict) -> dict:
         new_state_dict[k] = v
 
     return new_state_dict
+
+
+def extract_state_dict_from_checkpoint(checkpoint) -> dict:
+    """Extract a model state dict from common checkpoint layouts."""
+    if isinstance(checkpoint, dict):
+        for key in ('state_dict', 'model', 'model_state_dict', 'model_state', 'net'):
+            value = checkpoint.get(key)
+            if isinstance(value, dict):
+                return value
+    return checkpoint
 
 
 def load_checkpoint_smart(model: torch.nn.Module, state_dict: dict):
@@ -118,7 +138,15 @@ def build_model(
     adapter = None
     if adapter_name:
         adapter = build_adapter(adapter_name, **adapter_kwargs)
-    decoder_num_classes = decoder_kwargs.pop('num_classes', num_classes)
+    decoder_num_classes = decoder_kwargs.pop('num_classes', None)
+    if decoder_num_classes is None:
+        decoder_num_classes = num_classes
+    elif decoder_num_classes != num_classes:
+        print(
+            "Notice: decoder_kwargs['num_classes'] is overridden by the top-level "
+            f"num_classes={num_classes}."
+        )
+        decoder_num_classes = num_classes
     decoder = decoder_module.build_decoder(**decoder_kwargs, num_classes=decoder_num_classes)
     aux_head = None
     aux_type = decoder_name
@@ -186,11 +214,11 @@ def build_model(
                 )
             except TypeError:
                 checkpoint = torch.load(pretrain_path, map_location='cpu')
-            state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+            state_dict = extract_state_dict_from_checkpoint(checkpoint)
         elif encoder_name in SWIN_URLS:
             print(f"Auto-downloading Microsoft Official ImageNet weights for {encoder_name}...")
             checkpoint = torch.hub.load_state_dict_from_url(SWIN_URLS[encoder_name], map_location='cpu')
-            state_dict = checkpoint.get('model', checkpoint)
+            state_dict = extract_state_dict_from_checkpoint(checkpoint)
             
         if state_dict is not None:
             load_checkpoint_smart(model, state_dict)

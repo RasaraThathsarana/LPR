@@ -156,7 +156,10 @@ class InriaAerialImageDataset:
             with Image.open(mask_file) as mask:
                 gt = np.array(mask.convert('L'), dtype=np.uint8)
         else:
-            gt = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+            raise FileNotFoundError(
+                f'Annotation directory not found for Inria split "{self.split}" '
+                f'under {self.data_root}.'
+            )
 
         gt = (gt > 0).astype(np.int32)
 

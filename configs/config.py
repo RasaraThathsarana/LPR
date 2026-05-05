@@ -28,9 +28,9 @@ def _deep_merge_dicts(base: dict, override: dict) -> dict:
 
 DEFAULT_CONFIG_NAME = 'swin_base'
 # Global training hyperparameters applied to all models
-GLOBAL_BATCH_SIZE = 2
-GLOBAL_ACCUMULATION_STEPS = 1
-GLOBAL_LEARNING_RATE = 6e-5
+GLOBAL_BATCH_SIZE = 4
+GLOBAL_ACCUMULATION_STEPS = 4
+GLOBAL_LEARNING_RATE = 5e-5
 
 # Base configuration common to all variants
 BASE_CONFIG = {
@@ -46,8 +46,8 @@ BASE_CONFIG = {
     
     # Training settings (matches MMSeg schedule_160k.py)
     'train_cfg': {
-        'max_iters': 40000,
-        'val_interval': 1684,
+        'max_iters': 50000,
+        'val_interval': 1000,
     },
     
     # Data loading
@@ -84,12 +84,27 @@ BASE_CONFIG = {
     },
     
     'scheduler': {
-        'type': 'poly',
+        'type': 'plateau',
         'warmup': 'linear',
         'warmup_iters': 1500,
         'warmup_ratio': 1e-6,
         'power': 1.0,
         'eta_min': 0.0,
+        # ReduceLROnPlateau settings
+        'mode': 'max',
+        'factor': 0.5,
+        'patience': 3,
+        'min_lr': 1e-8,
+    },
+    
+    'early_stopping': {
+        'enabled': True,
+        'monitor': 'mIoU', # or 'mIoU'
+        'mode': 'max',     # 'min' for loss, 'max' for mIoU
+        'patience': 5,
+        'min_delta': 0.001,
+        'stop_on_min_lr': True,
+        'reset_on_lr_drop': True,
     },
 }
 
@@ -362,7 +377,6 @@ SWIN_BASE_UNET_CONFIG = {
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
             'decoder_channels': [768, 512, 256], #[512, 256, 128],
-            'num_classes': 150,
             'num_convs': 3, #2,
             'dropout_ratio': 0.1,
             'align_corners': False,

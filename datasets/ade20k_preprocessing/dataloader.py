@@ -29,13 +29,17 @@ class ADE20KDataLoader:
         pipeline,
         batch_size: int = 4,
         shuffle: bool = False,
-        drop_last: bool = False
+        drop_last: bool = False,
+        worker_init_fn=None,
+        generator=None
     ):
         self.dataset = dataset
         self.pipeline = pipeline
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.drop_last = drop_last
+        self.worker_init_fn = worker_init_fn
+        self.generator = generator
         
         # Create indices
         self.indices = list(range(len(dataset)))
@@ -98,16 +102,23 @@ class ADE20KDataLoader:
     
     def __iter__(self):
         """Iterate over batches."""
+        indices = list(range(len(self.dataset)))
+        if self.shuffle:
+            if self.generator is not None:
+                indices = torch.randperm(len(indices), generator=self.generator).tolist()
+            else:
+                indices = np.random.permutation(indices).tolist()
+
         for batch_idx in range(self.num_batches):
             start_idx = batch_idx * self.batch_size
-            end_idx = min(start_idx + self.batch_size, len(self.indices))
+            end_idx = min(start_idx + self.batch_size, len(indices))
             
             # Skip last batch if drop_last=True and incomplete
             if self.drop_last and end_idx - start_idx < self.batch_size:
                 continue
             
             # Get batch indices
-            batch_indices = self.indices[start_idx:end_idx]
+            batch_indices = indices[start_idx:end_idx]
             
             # Load and preprocess samples
             batch_imgs = []
