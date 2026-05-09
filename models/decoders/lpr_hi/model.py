@@ -230,8 +230,11 @@ class LocalPatchRefiner(nn.Module):
 class LPRHiDecoder(Decoder):
     def __init__(self, in_channels: List[int], num_classes: int, lpr_kwargs: dict):
         super().__init__()
-        # Extract spatial dropout safely or default to 0.2
-        spatial_dropout = lpr_kwargs.pop('spatial_dropout', 0.2)
+        # Copy kwargs so config-driven overrides do not mutate shared dictionaries.
+        lpr_kwargs = dict(lpr_kwargs)
+
+        # Support both the project-specific name and the common decoder naming.
+        spatial_dropout = lpr_kwargs.pop('spatial_dropout', lpr_kwargs.pop('dropout_ratio', 0.2))
         
         self.refiner = LocalPatchRefiner(in_channels_list=in_channels, **lpr_kwargs)
         
