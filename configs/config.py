@@ -28,8 +28,8 @@ def _deep_merge_dicts(base: dict, override: dict) -> dict:
 
 DEFAULT_CONFIG_NAME = 'swin_base'
 # Global training hyperparameters applied to all models
-GLOBAL_BATCH_SIZE = 8
-GLOBAL_ACCUMULATION_STEPS = 2
+GLOBAL_BATCH_SIZE = 16
+GLOBAL_ACCUMULATION_STEPS = 1
 GLOBAL_LEARNING_RATE = 5e-5
 
 # Base configuration common to all variants
@@ -219,7 +219,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': False,
+            'use_checkpoint': True,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -287,6 +287,8 @@ SWIN_BASE_LPR_CONFIG = {
         **SWIN_BASE_CONFIG['model'],
         'adapter': 'swinb_lpr_adapter',
         'train_encoder': True,
+        'use_auxiliary_decoder': False,
+        'name': 'swin_base_lpr',
         'adapter_kwargs': {
             'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
             'out_channels': 1024,
@@ -325,6 +327,8 @@ SWIN_BASE_LPR_HI_CONFIG = {
         **SWIN_BASE_CONFIG['model'],
         'adapter': None,
         'train_encoder': True,
+        'use_auxiliary_decoder': False,
+        'name': 'swin_base_lpr_hi',
         'decoder': 'lpr_hi',
         'decoder_kwargs': {
             # Process all multi-stage features directly from Swin Base
@@ -332,8 +336,8 @@ SWIN_BASE_LPR_HI_CONFIG = {
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'hidden_dim': 256,
-                'cnn_dim': 64,
-                'use_checkpoint': False,
+                'cnn_dim': 256,
+                'use_checkpoint': True,
                 'use_ppm': False,
                 'attn_drop': 0, #0.1,
                 'proj_drop': 0, #0.1,
@@ -360,6 +364,7 @@ SWIN_BASE_LPR_HI_NOPOOL_CONFIG = {
     **SWIN_BASE_CONFIG,
     'model': {
         **SWIN_BASE_LPR_HI_CONFIG['model'],
+        'name': 'swin_base_lpr_hi_nopool',
         'decoder_kwargs': {
             **SWIN_BASE_LPR_HI_CONFIG['model']['decoder_kwargs'],
             'lpr_kwargs': {
@@ -378,6 +383,8 @@ SWIN_BASE_UNET_CONFIG = {
         **SWIN_BASE_CONFIG['model'],
         'adapter': None,
         'train_encoder': True,
+        'use_auxiliary_decoder': False,
+        'name': 'swin_base_unet',
         'decoder': 'unet',
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -407,16 +414,141 @@ SWIN_BASE_UNET_CONFIG = {
 }
 
 
+def _build_swin_base_decoder_config(
+    config_name: str,
+    decoder_name: str,
+    decoder_kwargs: dict,
+    *,
+    use_auxiliary_decoder: bool = False,
+    auxiliary_kwargs: dict | None = None,
+) -> dict:
+    """Build a Swin Base variant for a specific decoder."""
+    config = copy.deepcopy(SWIN_BASE_CONFIG)
+    model = config['model']
+    model['name'] = config_name
+    model['decoder'] = decoder_name
+    model['adapter'] = None
+    model['train_encoder'] = True
+    model['use_auxiliary_decoder'] = use_auxiliary_decoder
+    model['decoder_kwargs'] = copy.deepcopy(decoder_kwargs)
+    if auxiliary_kwargs is not None:
+        model['auxiliary_kwargs'] = copy.deepcopy(auxiliary_kwargs)
+    return config
+
+
+SWIN_BASE_UPERNET_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_upernet',
+    'upernet',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+    },
+)
+
+SWIN_BASE_FPN_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_fpn',
+    'fpn',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_BASE_FCN_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_fcn',
+    'fcn',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 512,
+        'num_convs': 2,
+        'concat_input': False,
+        'dropout_ratio': 0.1,
+        'in_index': -1,
+        'align_corners': False,
+    },
+)
+
+SWIN_BASE_PSP_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_psp',
+    'psp',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_BASE_DEEPLABV3_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_deeplabv3',
+    'deeplabv3',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 512,
+        'dilations': (12, 24, 36),
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_BASE_DEEPLABV3PLUS_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_deeplabv3plus',
+    'deeplabv3plus',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 256,
+        'dilations': (12, 24, 36),
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+        'low_level_index': 0,
+        'low_level_channels': 48,
+    },
+)
+
+SWIN_BASE_SEGFORMER_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_segformer',
+    'segformer',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 256,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_BASE_OCR_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_ocr',
+    'ocr',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+
 # Configuration dictionary for easy access
 CONFIG = {
     'swin_tiny': SWIN_TINY_CONFIG,
     'swin_small': SWIN_SMALL_CONFIG,
     'swin_base': SWIN_BASE_CONFIG,
+    'swin_base_upernet': SWIN_BASE_UPERNET_CONFIG,
+    'swin_base_fpn': SWIN_BASE_FPN_CONFIG,
+    'swin_base_fcn': SWIN_BASE_FCN_CONFIG,
+    'swin_base_psp': SWIN_BASE_PSP_CONFIG,
+    'swin_base_deeplabv3': SWIN_BASE_DEEPLABV3_CONFIG,
+    'swin_base_deeplabv3plus': SWIN_BASE_DEEPLABV3PLUS_CONFIG,
+    'swin_base_segformer': SWIN_BASE_SEGFORMER_CONFIG,
+    'swin_base_ocr': SWIN_BASE_OCR_CONFIG,
+    'swin_base_unet': SWIN_BASE_UNET_CONFIG,
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
     'swin_base_lpr_hi': SWIN_BASE_LPR_HI_CONFIG,
     'swin_base_lpr_hi_nopool': SWIN_BASE_LPR_HI_NOPOOL_CONFIG,
-    'swin_base_unet': SWIN_BASE_UNET_CONFIG,
 }
 
 
@@ -424,7 +556,7 @@ DATASET_PRESETS = {
     'ade20k': {
         'dataset': 'ade20k',
         'data_root': 'data/ade/ADEChallengeData2016',
-        'crop_size': (224, 224),
+        'crop_size': (512, 512),
     },
     'inria': {
         'dataset': 'inria',
@@ -467,6 +599,54 @@ MODEL_DETAILS = {
         'flops': '1038G',
     },
     'swin_base': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_upernet': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_fpn': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_fcn': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_psp': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_deeplabv3': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_deeplabv3plus': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_segformer': {
+        'embed_dims': 128,
+        'depths': [2, 2, 18, 2],
+        'params': '121M',
+        'flops': '1841G',
+    },
+    'swin_base_ocr': {
         'embed_dims': 128,
         'depths': [2, 2, 18, 2],
         'params': '121M',

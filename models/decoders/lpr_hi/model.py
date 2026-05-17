@@ -80,6 +80,17 @@ class LocalPatchAttention(nn.Module):
 
         # DropPath (Stochastic Depth)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        
+        # FFN (MLP) component
+        mlp_hidden_dim = q_dim * 4
+        self.norm2 = nn.GroupNorm(1, q_dim) # Spatial Layer Normalization
+        self.mlp = nn.Sequential(
+            nn.Conv2d(q_dim, mlp_hidden_dim, kernel_size=1),
+            nn.GELU(),
+            nn.Dropout(proj_drop),
+            nn.Conv2d(mlp_hidden_dim, q_dim, kernel_size=1),
+            nn.Dropout(proj_drop)
+        )
 
     def _forward_impl(self, q, v):
         # q: (B, C_q, H, W) -> high res (Stride 4)
@@ -103,9 +114,14 @@ class LocalPatchAttention(nn.Module):
         V = self.v_proj(v_normed)
         K = self.channel_meanings
         
-        # Spatial-channel gating (spatial pixels gate matching V patch)
-        attn_logits = (Q @ K.t()) * (Q.shape[-1] ** -0.5)
+        # --- ENFORCE FLOAT32 FOR ATTENTION STABILITY ---
+        # Cast to float32 specifically for the matrix multiplication and sigmoid
+        attn_logits = (Q.float() @ K.float().t()) * (Q.shape[-1] ** -0.5)
         attn_weights = torch.sigmoid(attn_logits)
+        
+        # Cast weights back to the original dtype (e.g., float16) to multiply with V
+        attn_weights = attn_weights.to(V.dtype)
+        # -----------------------------------------------
         
         # Apply ViT-style Attention Dropout
         attn_weights = self.attn_drop(attn_weights)
@@ -121,8 +137,13 @@ class LocalPatchAttention(nn.Module):
         # Apply ViT-style Projection Dropout
         out = self.proj_drop(out)
 
-        # Residual connection with DropPath
-        return q + self.drop_path(out)
+        # Residual connection with DropPath for attention
+        x = q + self.drop_path(out)
+        
+        # FFN block with DropPath and residual connection
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+        return x
 
     def forward(self, q, v):
         if self.use_checkpoint and q.requires_grad:
@@ -187,20 +208,115 @@ class LocalPatchRefiner(nn.Module):
         # Spatial Dropout after PPM
         self.ppm_dropout = nn.Dropout2d(ppm_dropout) if use_ppm else nn.Identity()
 
+    def _cluster_and_compact(self, q, patch_size=4, target_k=4):
+        """
+        Clusters high-res queries locally to reduce sequence length for attention.
+        """
+        B, C, H, W = q.shape
+        pad_h = (patch_size - H % patch_size) % patch_size
+        pad_w = (patch_size - W % patch_size) % patch_size
+
+        if pad_h or pad_w:
+            # Make the feature map divisible by patch_size before reshaping.
+            q = F.pad(q, (0, pad_w, 0, pad_h), mode='reflect')
+
+        Hp, Wp = q.shape[2:]
+        ph, pw = Hp // patch_size, Wp // patch_size
+        
+        # 1. Slice into local patches
+        # (B, C, ph, patch_size, pw, patch_size) -> (B, ph*pw, patch_size*patch_size, C)
+        q_patches = q.view(B, C, ph, patch_size, pw, patch_size).permute(0, 2, 4, 3, 5, 1).reshape(B, ph * pw, patch_size * patch_size, C)
+        
+        # 2. Fast Cosine Similarity Clustering (k-means++ style init)
+        with torch.no_grad():
+            # Normalize for cosine similarity
+            q_norm = F.normalize(q_patches, p=2, dim=-1)
+            
+            # Select first cluster center randomly
+            idx_0 = torch.randint(0, patch_size * patch_size, (B, ph * pw, 1), device=q.device)
+            centers = torch.gather(q_norm, 2, idx_0.unsqueeze(-1).expand(-1, -1, -1, C))
+            
+            for _ in range(1, target_k):
+                # Distances to current centers
+                sim = torch.einsum('bnpc,bntc->bnpt', q_norm, centers) # (B, N, P, K)
+                max_sim, _ = sim.max(dim=-1) # (B, N, P)
+                
+                # Pick furthest point as next center
+                idx_next = max_sim.argmin(dim=-1, keepdim=True)
+                next_center = torch.gather(q_norm, 2, idx_next.unsqueeze(-1).expand(-1, -1, -1, C))
+                centers = torch.cat([centers, next_center], dim=2)
+            
+            # Final assignments
+            sim = torch.einsum('bnpc,bntc->bnpt', q_norm, centers)
+            assignments = sim.argmax(dim=-1) # (B, N, P) -> cluster index for each pixel
+            
+        # 3. Compact: Scatter Add (More memory efficient)
+        N_patches = ph * pw
+        P_dim = patch_size * patch_size
+        
+        compact_q = torch.zeros(B, N_patches, target_k, C, device=q.device, dtype=q.dtype)
+        idx_features = assignments.unsqueeze(-1).expand(-1, -1, -1, C)
+        compact_q.scatter_add_(2, idx_features, q_patches)
+        
+        counts = torch.zeros(B, N_patches, target_k, 1, device=q.device, dtype=q.dtype)
+        ones = torch.ones(B, N_patches, P_dim, 1, device=q.device, dtype=q.dtype)
+        counts.scatter_add_(2, assignments.unsqueeze(-1), ones)
+        
+        compact_q = compact_q / counts.clamp(min=1)
+        
+        # 4. Reshape back to spatial grid for the attention stages
+        # (B, ph*pw, target_k, C) -> We pretend target_k is a small spatial grid (e.g. 2x2 if k=4)
+        k_h = int(target_k**0.5)
+        k_w = target_k // k_h
+        compact_q_spatial = compact_q.reshape(B, ph, pw, k_h, k_w, C).permute(0, 5, 1, 3, 2, 4).reshape(B, C, ph * k_h, pw * k_w)
+        
+        return compact_q_spatial, assignments, (patch_size, k_h, k_w, H, W, Hp, Wp)
+
+    def _rebuild_original(self, compact_q_spatial, assignments, meta_info):
+        """
+        Un-groups the refined compact queries back to the original high-resolution grid.
+        """
+        patch_size, k_h, k_w, H, W, Hp, Wp = meta_info
+        B, C, cH, cW = compact_q_spatial.shape
+        ph, pw = Hp // patch_size, Wp // patch_size
+        target_k = k_h * k_w
+        
+        # 1. Reshape refined compact queries back to list form
+        # (B, C, ph*k_h, pw*k_w) -> (B, ph*pw, target_k, C)
+        compact_q = compact_q_spatial.view(B, C, ph, k_h, pw, k_w).permute(0, 2, 4, 3, 5, 1).reshape(B, ph * pw, target_k, C)
+        
+        # 2. Broadcast back using assignments
+        # assignments: (B, N, P) where P = patch_size*patch_size
+        # We need to gather from (B, N, K, C) using (B, N, P, 1)
+        expanded_assignments = assignments.unsqueeze(-1).expand(-1, -1, -1, C)
+        rebuilt_q_patches = torch.gather(compact_q, 2, expanded_assignments) # (B, N, P, C)
+        
+        # 3. Reshape back to original image grid
+        # (B, ph*pw, patch_size*patch_size, C) -> (B, C, Hp, Wp) -> crop to (H, W)
+        rebuilt_q = rebuilt_q_patches.reshape(B, ph, pw, patch_size, patch_size, C).permute(0, 5, 1, 3, 2, 4).reshape(B, C, Hp, Wp)
+        rebuilt_q = rebuilt_q[:, :, :H, :W]
+        
+        return rebuilt_q
+
     def forward(self, img, features: List[torch.Tensor]):
         q = self.cnn(img)
-        q = q + self.cpe(q)
+        q = q + self.cpe(q) # Re-enabled so clustering knows spatial positions
+        
+        # --- NEW: Cluster & Compact ---
+        # Assuming we want to reduce a 4x4 patch (16 pixels) to 4 representatives (2x2)
+        q_compact, assignments, meta_info = self._cluster_and_compact(q, patch_size=4, target_k=4)
         
         # Apply PPM to the deepest feature map (Stride 32) if enabled
         enhanced_features = list(features)
         if self.use_ppm:
             enhanced_features[-1] = self.ppm_dropout(self.ppm(enhanced_features[-1]))
         
-        # Process Bottom-Up (Fine-to-Coarse): Stride 4 -> 8 -> 16 -> 32
+        # Process Bottom-Up (Fine-to-Coarse) on the COMPACT grid
+        # We process q_compact instead of q
         for i, (stage, f) in enumerate(zip(self.stages, enhanced_features)):
             
             h_f, w_f = f.shape[2:]
-            h_q, w_q = q.shape[2:]
+            h_q, w_q = q_compact.shape[2:]
             
             # Ensure Q perfectly matches F's grid scaled by relative patch ratio
             ratio_h = max(1, round(h_q / h_f))
@@ -210,7 +326,7 @@ class LocalPatchRefiner(nn.Module):
             pad_h = target_h - h_q
             pad_w = target_w - w_q
             
-            q_stage = q
+            q_stage = q_compact
             if pad_h > 0 or pad_w > 0:
                  q_stage = F.pad(q_stage, (0, max(0, pad_w), 0, max(0, pad_h)), mode='reflect')
             if pad_h < 0 or pad_w < 0:
@@ -223,7 +339,10 @@ class LocalPatchRefiner(nn.Module):
             if pad_h < 0 or pad_w < 0:
                  q_stage = F.pad(q_stage, (0, max(0, -pad_w), 0, max(0, -pad_h)), mode='reflect')
                  
-            q = q_stage
+            q_compact = q_stage
+            
+        # --- NEW: Rebuild to Original High-Res Grid ---
+        q = self._rebuild_original(q_compact, assignments, meta_info)
             
         return q
 
@@ -260,11 +379,12 @@ class LPRHiDecoder(Decoder):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
+            elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1.0)
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, features: List[torch.Tensor], img: torch.Tensor):
         refined_features = self.refiner(img, features)
         out = self.cls_seg(refined_features)
-        return F.interpolate(out, size=img.shape[2:], mode='bilinear', align_corners=False)
+        # return F.interpolate(out, size=img.shape[2:], mode='bilinear', align_corners=False)
+        return out
