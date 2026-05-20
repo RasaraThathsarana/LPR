@@ -28,8 +28,8 @@ def _deep_merge_dicts(base: dict, override: dict) -> dict:
 
 DEFAULT_CONFIG_NAME = 'swin_base'
 # Global training hyperparameters applied to all models
-GLOBAL_BATCH_SIZE = 16
-GLOBAL_ACCUMULATION_STEPS = 1
+GLOBAL_BATCH_SIZE = 4
+GLOBAL_ACCUMULATION_STEPS = 4
 GLOBAL_LEARNING_RATE = 5e-5
 
 # Base configuration common to all variants
@@ -219,7 +219,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': True,
+            'use_checkpoint': False,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
