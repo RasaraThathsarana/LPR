@@ -150,6 +150,60 @@ class LocalPatchAttention(nn.Module):
             return checkpoint(self._forward_impl, q, v, use_reentrant=False)
         return self._forward_impl(q, v)
 
+class HighResQueryExtractor(nn.Module):
+    """
+    Modernized, Memory-Efficient CNN for High-Res Queries.
+    Uses a ConvNeXt-inspired inverted residual block with a massive 7x7 
+    receptive field to capture rich spatial context with a fraction of the 
+    parameters and memory footprint of standard convolutions.
+    """
+    def __init__(self, in_channels: int, cnn_dim: int, hidden_dim: int, use_checkpoint: bool = False):
+        super().__init__()
+        self.use_checkpoint = use_checkpoint
+        
+        # Stem: Initial feature extraction
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, cnn_dim, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(cnn_dim),
+            nn.GELU()
+        )
+        
+        # Large Kernel Depthwise Conv (7x7) for spatial context
+        self.dwconv = nn.Conv2d(cnn_dim, cnn_dim, kernel_size=7, padding=3, groups=cnn_dim, bias=False)
+        self.norm = nn.BatchNorm2d(cnn_dim)
+        
+        # Inverted Bottleneck (Pointwise Expand -> Act -> Pointwise Project)
+        self.pwconv1 = nn.Conv2d(cnn_dim, cnn_dim * 2, kernel_size=1, bias=False)
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Conv2d(cnn_dim * 2, cnn_dim, kernel_size=1, bias=False)
+        
+        # LayerScale for stable residual gradient flow
+        self.gamma = nn.Parameter(torch.ones(cnn_dim, 1, 1) * 1e-2)
+        
+        # Final projection to match attention hidden dimension (Linear, no activation)
+        self.proj = nn.Conv2d(cnn_dim, hidden_dim, kernel_size=1)
+
+    def _forward_impl(self, x):
+        x = self.stem(x)
+        
+        # Inverted Residual Block computation
+        res = x
+        x = self.dwconv(x)
+        x = self.norm(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        
+        x = res + self.gamma * x
+        
+        return self.proj(x)
+
+    def forward(self, x):
+        # Solves High Memory Consumption for Stride-1
+        if self.use_checkpoint and x.requires_grad:
+            return checkpoint(self._forward_impl, x, use_reentrant=False)
+        return self._forward_impl(x)
+
 class LocalPatchRefiner(nn.Module):
     def __init__(
         self,
@@ -168,15 +222,12 @@ class LocalPatchRefiner(nn.Module):
         self.hidden_dim = hidden_dim
         self.use_ppm = use_ppm
         
-        # Extremely lightweight CNN to extract full-resolution (Stride-1) queries
-        self.cnn = nn.Sequential(
-            nn.Conv2d(in_channels, cnn_dim, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(cnn_dim),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(cnn_dim, cnn_dim * 2, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(cnn_dim * 2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(cnn_dim * 2, hidden_dim, kernel_size=1)
+        # Replaced with the strong, memory-efficient extractor
+        self.cnn = HighResQueryExtractor(
+            in_channels=in_channels,
+            cnn_dim=cnn_dim,
+            hidden_dim=hidden_dim,
+            use_checkpoint=use_checkpoint
         )
         
         # Conditional Positional Encoding
