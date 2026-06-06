@@ -5,3 +5,4 @@ opencv-python>=4.5.0
 Pillow>=8.0.0
 tensorboard>=2.5.0
 tqdm>=4.50.0
+datasets>=5.0.0

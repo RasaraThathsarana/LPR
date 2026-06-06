@@ -24,6 +24,8 @@ from datasets.ade20k_preprocessing.preprocessing import build_pipeline
 from datasets.ade20k_preprocessing.preprocessing_config import VAL_PIPELINE as ADE20K_VAL_PIPELINE
 from datasets.inria_preprocessing.preprocessing_config import VAL_PIPELINE as INRIA_VAL_PIPELINE
 from datasets.inria_preprocessing.inria_dataset import build_tile_coordinates, stitch_tile_logits
+from datasets.pannuke_preprocessing import PanNukeDataset
+from datasets.pannuke_preprocessing.preprocessing_config import VAL_PIPELINE as PANNUKE_VAL_PIPELINE
 from evaluation.evaluation import SegmentationMetrics
 from configs import CONFIG
 from configs.config import build_config
@@ -75,6 +77,10 @@ class SegmentationInferencer:
         if self.dataset_name == 'inria':
             self.pipeline = build_pipeline(INRIA_VAL_PIPELINE)
             self.tile_size = 224
+            self.large_image_threshold = 512
+        elif self.dataset_name == 'pannuke':
+            self.pipeline = build_pipeline(PANNUKE_VAL_PIPELINE)
+            self.tile_size = 256
             self.large_image_threshold = 512
         else:
             self.pipeline = build_pipeline(ADE20K_VAL_PIPELINE)
@@ -280,7 +286,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--dataset', type=str, default=None,
-        choices=['ade20k', 'inria'],
+        choices=['ade20k', 'inria', 'pannuke'],
         help='Dataset preset to pair with the selected backbone'
     )
     parser.add_argument(
@@ -353,7 +359,12 @@ if __name__ == '__main__':
     )
     
     # Get palette for visualization
-    palette = InriaAerialImageDataset.get_palette() if dataset_name == 'inria' else ADE20KDataset.get_palette()
+    if dataset_name == 'inria':
+        palette = InriaAerialImageDataset.get_palette()
+    elif dataset_name == 'pannuke':
+        palette = PanNukeDataset.get_palette()
+    else:
+        palette = ADE20KDataset.get_palette()
     
     if args.image:
         # Infer on single image
@@ -389,6 +400,13 @@ if __name__ == '__main__':
                 archive_path=None,
             )
             dataset = InriaAerialImageDataset(
+                data_root=prepared_root,
+                split=args.dataset_split,
+            )
+        elif dataset_name == 'pannuke':
+            prepared_root = args.data_root or cfg.get('data_root', 'data/pannuke')
+            # No automatic download for PanNuke; assume prepared dataset exists
+            dataset = PanNukeDataset(
                 data_root=prepared_root,
                 split=args.dataset_split,
             )

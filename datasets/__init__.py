@@ -2,6 +2,7 @@
 
 from .ade20k_preprocessing import ADE20KDataset
 from .inria_preprocessing import InriaAerialImageDataset
+from .pannuke_preprocessing import PanNukeDataset
 
 
 def create_train_loader(
@@ -18,6 +19,9 @@ def create_train_loader(
         return _create_train_loader(data_root, pipeline_config, batch_size=batch_size, shuffle=shuffle, **kwargs)
     if dataset_name == 'inria':
         from .inria_preprocessing import create_train_loader as _create_train_loader
+        return _create_train_loader(data_root, pipeline_config, batch_size=batch_size, shuffle=shuffle, **kwargs)
+    if dataset_name == 'pannuke':
+        from .pannuke_preprocessing import create_train_loader as _create_train_loader
         return _create_train_loader(data_root, pipeline_config, batch_size=batch_size, shuffle=shuffle, **kwargs)
     raise ValueError(f'Unknown dataset: {dataset_name}')
 
@@ -36,12 +40,16 @@ def create_val_loader(
     if dataset_name == 'inria':
         from .inria_preprocessing import create_val_loader as _create_val_loader
         return _create_val_loader(data_root, pipeline_config, batch_size=batch_size, **kwargs)
+    if dataset_name == 'pannuke':
+        from .pannuke_preprocessing import create_val_loader as _create_val_loader
+        return _create_val_loader(data_root, pipeline_config, batch_size=batch_size, **kwargs)
     raise ValueError(f'Unknown dataset: {dataset_name}')
 
 
 __all__ = [
     'ADE20KDataset',
     'InriaAerialImageDataset',
+    'PanNukeDataset',
     'create_train_loader',
     'create_val_loader',
 ]

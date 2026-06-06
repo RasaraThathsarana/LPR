@@ -28,8 +28,8 @@ def _deep_merge_dicts(base: dict, override: dict) -> dict:
 
 DEFAULT_CONFIG_NAME = 'swin_base'
 # Global training hyperparameters applied to all models
-GLOBAL_BATCH_SIZE = 4
-GLOBAL_ACCUMULATION_STEPS = 4
+GLOBAL_BATCH_SIZE = 16
+GLOBAL_ACCUMULATION_STEPS = 1
 GLOBAL_LEARNING_RATE = 5e-5
 
 # Base configuration common to all variants
@@ -37,7 +37,7 @@ BASE_CONFIG = {
     'num_classes': 150,
     'dataset': 'ade20k',
     'data_root': 'data/ade/ADEChallengeData2016',
-    'crop_size': (512, 512),
+    'crop_size': (256, 256),
     'data_preprocessor': {
         'mean': [123.675, 116.28, 103.53],
         'std': [58.395, 57.12, 57.375],
@@ -219,7 +219,7 @@ SWIN_BASE_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.3,
-            'use_checkpoint': False,
+            'use_checkpoint': True,
         },
         'decoder_kwargs': {
             'in_channels': [128, 256, 512, 1024],
@@ -557,6 +557,8 @@ DATASET_PRESETS = {
         'dataset': 'ade20k',
         'data_root': 'data/ade/ADEChallengeData2016',
         'crop_size': (512, 512),
+        'train_split': 'training',
+        'val_split': 'validation',
     },
     'inria': {
         'dataset': 'inria',
@@ -564,6 +566,17 @@ DATASET_PRESETS = {
         'raw_data_root': 'data/inria/AerialImageDataset',
         'data_root': 'data/inria/AerialImageDataset_tiled',
         'crop_size': (224, 224),
+        'train_split': 'training',
+        'val_split': 'validation',
+    },
+    'pannuke': {
+        'dataset': 'pannuke',
+        'num_classes': 6,
+        'raw_data_root': 'data/pannuke_raw',
+        'data_root': 'data/pannuke',
+        'crop_size': (256, 256),
+        'train_split': 'fold1',
+        'val_split': 'fold2',
     },
 }
 

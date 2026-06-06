@@ -14,12 +14,18 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import cv2
+from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
-from typing import Dict
+from typing import Dict, Optional
 import json
 import sys
 import datetime
+
+# Ensure the local LPR package root is on PYTHONPATH when running the script directly.
+repo_package_root = Path(__file__).resolve().parents[1]
+if str(repo_package_root) not in sys.path:
+    sys.path.insert(0, str(repo_package_root))
 
 from models import build_model
 from models.model import (
@@ -76,6 +82,9 @@ class Trainer:
         # Create directories
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.val_visualization_dir = self.log_dir / 'validation_visualizations'
+        self.val_visualization_dir.mkdir(parents=True, exist_ok=True)
+        self.val_visualization_samples = 5
         
         # Setup optimizer and scheduler
         self.optimizer = self._build_optimizer()
@@ -250,6 +259,7 @@ class Trainer:
         hist = np.zeros((num_classes, num_classes))
         total_loss = 0.0
         num_batches = 0
+        visual_samples = []
         
         try:
             with tqdm(self.val_loader, desc='Validating') as pbar:
@@ -266,11 +276,20 @@ class Trainer:
                     # Get predictions
                     preds = outputs.argmax(dim=1)  # (B, H, W)
                     
+                    if len(visual_samples) < self.val_visualization_samples:
+                        imgs_np = imgs.cpu().numpy()
+                        segs_np = segs.cpu().numpy()
+                        preds_np = preds.cpu().numpy()
+                        for sample_index in range(imgs_np.shape[0]):
+                            if len(visual_samples) >= self.val_visualization_samples:
+                                break
+                            visual_samples.append((imgs_np[sample_index], segs_np[sample_index], preds_np[sample_index]))
+
                     if preds.shape == segs.shape:
-                        preds_np = preds.cpu().numpy().flatten()
-                        segs_np = segs.cpu().numpy().flatten()
-                        mask = segs_np != 255
-                        hist += self._compute_hist(preds_np[mask], segs_np[mask], num_classes)
+                        preds_flat = preds.cpu().numpy().flatten()
+                        segs_flat = segs.cpu().numpy().flatten()
+                        mask = segs_flat != 255
+                        hist += self._compute_hist(preds_flat[mask], segs_flat[mask], num_classes)
                     else:
                         # Compute confusion matrix
                         for pred, seg in zip(preds, segs):
@@ -298,7 +317,10 @@ class Trainer:
             
             # Compute metrics
             metrics = self._compute_miou(hist)
+            metrics['iou_per_class'] = self._compute_iou_per_class(hist)
             metrics['loss'] = total_loss / num_batches if num_batches > 0 else 0.0
+            if visual_samples:
+                self._save_validation_visualizations(visual_samples, self.current_iter)
             
         finally:
             if was_training:
@@ -387,6 +409,60 @@ class Trainer:
             'mAcc': np.nanmean(accs),
             'allAcc': all_acc,
         }
+
+    def _compute_iou_per_class(self, hist) -> Dict[int, float]:
+        """Compute IoU for each class."""
+        num_classes = hist.shape[0]
+        ious = {}
+        for i in range(num_classes):
+            tp = hist[i, i]
+            fp = hist[:, i].sum() - tp
+            fn = hist[i, :].sum() - tp
+
+            if tp + fp + fn == 0:
+                ious[i] = np.nan
+            else:
+                ious[i] = tp / (tp + fp + fn)
+
+        return ious
+
+    def _image_to_uint8(self, img: np.ndarray) -> np.ndarray:
+        if img.dtype == np.float32 or img.dtype == np.float64:
+            if img.max() <= 1.0:
+                img = img * 255.0
+        img = np.clip(img, 0, 255).astype(np.uint8)
+        if img.ndim == 3 and img.shape[0] == 3:
+            img = img.transpose(1, 2, 0)
+        return img
+
+    def _get_color_palette(self, num_classes: int):
+        palette = []
+        for i in range(num_classes):
+            if i == 0:
+                palette.append((0, 0, 0))
+            else:
+                palette.append(((37 * i) % 256, (73 * i) % 256, (149 * i) % 256))
+        return palette
+
+    def _decode_segmap(self, seg_map: np.ndarray, palette):
+        h, w = seg_map.shape
+        color_map = np.zeros((h, w, 3), dtype=np.uint8)
+        for label, color in enumerate(palette):
+            color_map[seg_map == label] = color
+        return color_map
+
+    def _save_validation_visualizations(self, visual_samples, step: int):
+        palette = self._get_color_palette(self.config['num_classes'])
+        for sample_index, (img, gt, pred) in enumerate(visual_samples, start=1):
+            img = self._image_to_uint8(img)
+            gt_color = self._decode_segmap(gt, palette)
+            pred_color = self._decode_segmap(pred, palette)
+            if img.ndim == 2:
+                img = np.stack([img] * 3, axis=-1)
+            combined = np.concatenate([img, gt_color, pred_color], axis=1)
+            output = Image.fromarray(combined)
+            output_path = self.val_visualization_dir / f'val_step_{step:06d}_sample_{sample_index}.png'
+            output.save(str(output_path))
 
     def _update_hist(self, hist: np.ndarray, preds: torch.Tensor, segs: torch.Tensor) -> np.ndarray:
         """Update confusion matrix histogram from model predictions."""
@@ -619,6 +695,17 @@ class Trainer:
                             self.writer.add_scalar('val/mIoU', metrics['mIoU'], self.current_iter)
                             self.writer.add_scalar('val/mAcc', metrics['mAcc'], self.current_iter)
                             self.writer.add_scalar('val/loss', metrics['loss'], self.current_iter)
+                            self.writer.add_histogram(
+                                'val/IoU/per_class',
+                                np.array([v for v in metrics['iou_per_class'].values()], dtype=np.float32),
+                                self.current_iter
+                            )
+                            for class_idx, class_iou in metrics['iou_per_class'].items():
+                                self.writer.add_scalar(
+                                    f'val/IoU/class_{class_idx}',
+                                    class_iou,
+                                    self.current_iter
+                                )
                             
                             # Check early stopping (run before saving so states are correctly updated)
                             if self._check_early_stopping(metrics):
@@ -638,14 +725,19 @@ class Trainer:
         print("Training completed!")
         self.writer.close()
 
-def set_random_seed(seed: int, deterministic: bool = False):
-    """Set random seed for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+
+def set_random_seed(seed: Optional[int] = None, deterministic: bool = True):
+    """Set random seed and deterministic behavior for reproducibility."""
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    # Disable non-deterministic CuDNN algorithms for reproducible results.
+    # This is important when using seeded training and GPU operations.
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -673,9 +765,12 @@ def train(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     
-    if args.seed is not None:
-        print(f"Setting random seed to {args.seed} (deterministic: {args.deterministic})")
-        set_random_seed(args.seed, args.deterministic)
+    if args.seed is not None or args.deterministic:
+        print(
+            f"Setting random seed to {args.seed if args.seed is not None else 'None'} "
+            "(deterministic: enabled)"
+        )
+        set_random_seed(args.seed, deterministic=True)
     
     # Load configuration
     config = build_config(args.config, args.dataset)
@@ -711,6 +806,20 @@ def train(args):
             archive_path=args.inria_archive,
         )
         from datasets.inria_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
+    elif dataset_name == 'pannuke':
+        prepared_root = config['data_root']
+        from datasets.pannuke_preprocessing.download import ensure_pannuke_dataset
+        if args.download_data:
+            print('Downloading and preparing the PanNuke dataset from Hugging Face...')
+            ensure_pannuke_dataset(prepared_root, download=True)
+        else:
+            try:
+                ensure_pannuke_dataset(prepared_root, download=False)
+            except FileNotFoundError:
+                from datasets.pannuke_preprocessing.download import download_instructions
+                print(download_instructions())
+                raise
+        from datasets.pannuke_preprocessing.preprocessing_config import TRAIN_PIPELINE, VAL_PIPELINE
     else:
         raise ValueError(f"Unknown dataset in config: {dataset_name}")
 
@@ -732,6 +841,7 @@ def train(args):
         TRAIN_PIPELINE,
         batch_size=config['batch_size'],
         dataset_name=dataset_name,
+        split=config.get('train_split', 'training'),
         **dl_kwargs
     )
     val_loader = create_val_loader(
@@ -739,6 +849,7 @@ def train(args):
         VAL_PIPELINE,
         batch_size=config.get('val_batch_size') or 1,
         dataset_name=dataset_name,
+        split=config.get('val_split', 'validation'),
         **dl_kwargs
     )
     
@@ -788,7 +899,7 @@ if __name__ == '__main__':
                        choices=list(CONFIG.keys()),
                        help='Model backbone/config name')
     parser.add_argument('--dataset', type=str, default=None,
-                       choices=['ade20k', 'inria'],
+                       choices=['ade20k', 'inria', 'pannuke'],
                        help='Dataset preset to pair with the selected backbone')
     parser.add_argument('--data-root', type=str, default=None,
                        help='Override prepared dataset root path from config')
@@ -817,9 +928,9 @@ if __name__ == '__main__':
                                      help='Disable encoder training')
     parser.set_defaults(train_encoder=None)
     parser.add_argument('--seed', type=int, default=None,
-                       help='Random seed for reproducibility')
+                       help='Random seed for reproducibility. When set, deterministic backend options are enabled.')
     parser.add_argument('--deterministic', action='store_true',
-                       help='Whether to set deterministic options for CUDNN backend')
+                       help='Also enable deterministic backend options when no seed is provided.')
     
     args = parser.parse_args()
     
