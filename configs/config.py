@@ -530,6 +530,24 @@ SWIN_BASE_OCR_CONFIG = _build_swin_base_decoder_config(
     },
 )
 
+SWIN_BASE_TCAD_CONFIG = _build_swin_base_decoder_config(
+    'swin_base_tcad',
+    'tcad',
+    {
+        'in_channels': [128, 256, 512, 1024],
+        'decoder_kwargs': {
+            'hidden_dim': 256,
+            'use_checkpoint': False,
+            'use_ppm': False,
+            'attn_drop': 0 #0.1,
+            'proj_drop': 0 #0.1,
+            'drop_path_rate': 0 #0.1,
+            'ppm_dropout': 0 #0.2,
+            'spatial_dropout': 0 #0.2,
+        },
+    },
+)
+
 
 # Configuration dictionary for easy access
 CONFIG = {
@@ -544,6 +562,7 @@ CONFIG = {
     'swin_base_deeplabv3plus': SWIN_BASE_DEEPLABV3PLUS_CONFIG,
     'swin_base_segformer': SWIN_BASE_SEGFORMER_CONFIG,
     'swin_base_ocr': SWIN_BASE_OCR_CONFIG,
+    'swin_base_tcad': SWIN_BASE_TCAD_CONFIG,
     'swin_base_unet': SWIN_BASE_UNET_CONFIG,
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
