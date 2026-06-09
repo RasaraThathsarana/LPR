@@ -213,6 +213,7 @@ class LocalPatchRefiner(nn.Module):
         cnn_dim: int = 64,
         use_checkpoint: bool = True,
         use_ppm: bool = True,
+        use_clustering: bool = False,
         attn_drop: float = 0.1,
         proj_drop: float = 0.1,
         drop_path_rate: float = 0.1,
@@ -221,6 +222,7 @@ class LocalPatchRefiner(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.use_ppm = use_ppm
+        self.use_clustering = use_clustering
         
         # Replaced with the strong, memory-efficient extractor
         self.cnn = HighResQueryExtractor(
@@ -353,9 +355,14 @@ class LocalPatchRefiner(nn.Module):
         q = self.cnn(img)
         q = q + self.cpe(q) # Re-enabled so clustering knows spatial positions
         
-        # --- NEW: Cluster & Compact ---
-        # Assuming we want to reduce a 4x4 patch (16 pixels) to 4 representatives (2x2)
-        q_compact, assignments, meta_info = self._cluster_and_compact(q, patch_size=4, target_k=4)
+        if self.use_clustering:
+            # --- Cluster & Compact ---
+            q_compact, assignments, meta_info = self._cluster_and_compact(q, patch_size=4, target_k=4)
+        else:
+            # Process every pixel query directly without local clustering
+            q_compact = q
+            assignments = None
+            meta_info = None
         
         # Apply PPM to the deepest feature map (Stride 32) if enabled
         enhanced_features = list(features)
@@ -392,8 +399,11 @@ class LocalPatchRefiner(nn.Module):
                  
             q_compact = q_stage
             
-        # --- NEW: Rebuild to Original High-Res Grid ---
-        q = self._rebuild_original(q_compact, assignments, meta_info)
+        if self.use_clustering:
+            # --- Rebuild to Original High-Res Grid ---
+            q = self._rebuild_original(q_compact, assignments, meta_info)
+        else:
+            q = q_compact
             
         return q
 

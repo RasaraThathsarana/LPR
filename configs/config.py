@@ -209,7 +209,7 @@ SWIN_BASE_CONFIG = {
         'train_encoder': True,
         'use_auxiliary_decoder': False,
         'name': 'swin_base',
-        'pretrained': True,
+        'pretrained': False,
         'pretrain_path': None,
         'encoder_kwargs': {
             'embed_dims': 128,
@@ -336,25 +336,16 @@ SWIN_BASE_LPR_HI_CONFIG = {
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'hidden_dim': 256,
-                'cnn_dim': 256,
+                'cnn_dim': 64,
                 'use_checkpoint': True,
                 'use_ppm': False,
+                'use_clustering': True,
                 'attn_drop': 0, #0.1,
                 'proj_drop': 0, #0.1,
                 'drop_path_rate': 0, #0.1,
                 'ppm_dropout': 0, #0.2,
                 'spatial_dropout': 0, #0.2,
             }
-        },
-        'auxiliary_kwargs': {
-            'type': 'upernet',
-            'in_channels': 512,
-            'channels': 256,
-            'num_convs': 1,
-            'concat_input': False,
-            'dropout_ratio': 0.1,
-            'in_index': 2,
-            'align_corners': False,
         },
     },
 }
