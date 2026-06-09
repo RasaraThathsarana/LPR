@@ -209,7 +209,7 @@ SWIN_BASE_CONFIG = {
         'train_encoder': True,
         'use_auxiliary_decoder': False,
         'name': 'swin_base',
-        'pretrained': False,
+        'pretrained': True,
         'pretrain_path': None,
         'encoder_kwargs': {
             'embed_dims': 128,
