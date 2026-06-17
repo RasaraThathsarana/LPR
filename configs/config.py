@@ -1,5 +1,5 @@
 """
-Training configurations for Swin UPerNet models.
+Training configurations for Swin encoder-decoder models.
 
 These configurations replicate MMSegmentation's settings for:
 - Swin Tiny
@@ -139,7 +139,7 @@ SWIN_TINY_CONFIG = {
             'mlp_ratio': 4,
             'patch_size': 4,
             'drop_path_rate': 0.2,
-            'use_checkpoint': False,
+            'use_checkpoint': True,
         },
         'decoder_kwargs': {
             'in_channels': [96, 192, 384, 768],
@@ -280,24 +280,18 @@ SWIN_LARGE_CONFIG = {
 }
 
 
-# Swin Base with Adapter and LPR Decoder configuration
+# Swin Base with LPR Decoder configuration
 SWIN_BASE_LPR_CONFIG = {
     **SWIN_BASE_CONFIG,
     'model': {
         **SWIN_BASE_CONFIG['model'],
-        'adapter': 'swinb_lpr_adapter',
+        'adapter': None,
         'train_encoder': True,
         'use_auxiliary_decoder': False,
         'name': 'swin_base_lpr',
-        'adapter_kwargs': {
-            'in_channels': 1920,  # Sum of Swin Base channels: 128+256+512+1024
-            'out_channels': 1024,
-            'use_checkpoint': True,
-        },
         'decoder': 'lpr',
         'decoder_kwargs': {
-            # The adapter reduces the 4 feature maps into a single 256-channel tensor
-            'in_channels': [1024],
+            'in_channels': [128, 256, 512, 1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'patch_size': 16,
@@ -324,7 +318,10 @@ SWIN_BASE_LPR_CONFIG = {
 SWIN_BASE_LPR_HI_CONFIG = {
     **SWIN_BASE_CONFIG,
     'model': {
-        **SWIN_BASE_CONFIG['model'],
+        'encoder': 'swin_base',
+        'pretrained': True,
+        'pretrain_path': None,
+        'encoder_kwargs': SWIN_BASE_CONFIG['model']['encoder_kwargs'],
         'adapter': None,
         'train_encoder': True,
         'use_auxiliary_decoder': False,
@@ -332,7 +329,7 @@ SWIN_BASE_LPR_HI_CONFIG = {
         'decoder': 'lpr_hi',
         'decoder_kwargs': {
             # Process all multi-stage features directly from Swin Base
-            'in_channels': [96, 192, 384, 768], #[128, 256, 512, 1024],
+            'in_channels': [128, 256, 512, 1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'hidden_dim': 256,
@@ -355,6 +352,251 @@ SWIN_BASE_LPR_HI_CONFIG = {
             'dropout_ratio': 0.1,
             'in_index': 2,
             'align_corners': False,
+        },
+    },
+}
+
+
+def _build_swin_base_decoder_config(
+    config_name: str,
+    decoder_name: str,
+    decoder_kwargs: dict,
+    *,
+    use_auxiliary_decoder: bool = False,
+    auxiliary_kwargs: dict | None = None,
+) -> dict:
+    """Build a Swin Base variant for a specific decoder."""
+    config = copy.deepcopy(SWIN_BASE_CONFIG)
+    model = config['model']
+    model['name'] = config_name
+    model['decoder'] = decoder_name
+    model['adapter'] = None
+    model['train_encoder'] = True
+    model['use_auxiliary_decoder'] = use_auxiliary_decoder
+    model['decoder_kwargs'] = copy.deepcopy(decoder_kwargs)
+    if auxiliary_kwargs is not None:
+        model['auxiliary_kwargs'] = copy.deepcopy(auxiliary_kwargs)
+    return config
+
+
+def _build_swin_tiny_decoder_config(
+    config_name: str,
+    decoder_name: str,
+    decoder_kwargs: dict,
+    *,
+    use_auxiliary_decoder: bool = False,
+    auxiliary_kwargs: dict | None = None,
+) -> dict:
+    """Build a Swin Tiny variant for a specific decoder."""
+    config = copy.deepcopy(SWIN_TINY_CONFIG)
+    model = config['model']
+    model['name'] = config_name
+    model['decoder'] = decoder_name
+    model['adapter'] = None
+    model['train_encoder'] = True
+    model['use_auxiliary_decoder'] = use_auxiliary_decoder
+    model['decoder_kwargs'] = copy.deepcopy(decoder_kwargs)
+    if auxiliary_kwargs is not None:
+        model['auxiliary_kwargs'] = copy.deepcopy(auxiliary_kwargs)
+    return config
+
+
+# Swin Tiny decoder variants
+SWIN_TINY_UPERNET_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_upernet',
+    'upernet',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+    },
+)
+
+SWIN_TINY_FPN_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_fpn',
+    'fpn',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_TINY_FCN_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_fcn',
+    'fcn',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 512,
+        'num_convs': 2,
+        'concat_input': False,
+        'dropout_ratio': 0.1,
+        'in_index': -1,
+        'align_corners': False,
+    },
+)
+
+SWIN_TINY_PSP_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_psp',
+    'psp',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_TINY_DEEPLABV3_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_deeplabv3',
+    'deeplabv3',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 512,
+        'dilations': (12, 24, 36),
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_TINY_DEEPLABV3PLUS_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_deeplabv3plus',
+    'deeplabv3plus',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 256,
+        'dilations': (12, 24, 36),
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+        'low_level_index': 0,
+        'low_level_channels': 48,
+    },
+)
+
+SWIN_TINY_SEGFORMER_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_segformer',
+    'segformer',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 256,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_TINY_OCR_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_ocr',
+    'ocr',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'channels': 512,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+    },
+)
+
+SWIN_TINY_TCAD_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_tcad',
+    'tcad',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'decoder_kwargs': {
+            'hidden_dim': 256,
+            'use_checkpoint': False,
+            'use_ppm': False,
+            'attn_drop': 0,
+            'proj_drop': 0,
+            'drop_path_rate': 0,
+            'ppm_dropout': 0,
+            'spatial_dropout': 0,
+        },
+    },
+)
+
+SWIN_TINY_UNET_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_unet',
+    'unet',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'decoder_channels': [512, 256, 128],
+        'num_convs': 3,
+        'dropout_ratio': 0.1,
+        'align_corners': False,
+        'output_scale': 4,
+        'upsample_cfg': {
+            'type': 'InterpConv',
+            'scale_factor': 2,
+            'mode': 'bilinear',
+            'align_corners': False,
+        },
+    },
+)
+
+SWIN_TINY_LPR_CONFIG = {
+    **SWIN_TINY_CONFIG,
+    'model': {
+        **SWIN_TINY_CONFIG['model'],
+        'adapter': None,
+        'train_encoder': True,
+        'use_auxiliary_decoder': False,
+        'name': 'swin_tiny_lpr',
+        'decoder': 'lpr',
+        'decoder_kwargs': {
+            'in_channels': [96, 192, 384, 768],
+            'lpr_kwargs': {
+                'in_channels': 3,
+                'patch_size': 16,
+                'hidden_dim': 384,
+                'cnn_dim': 64,
+                'use_checkpoint': True,
+            },
+        },
+        'auxiliary_kwargs': {
+            'type': 'upernet',
+            'in_channels': 384,
+            'channels': 256,
+            'num_convs': 1,
+            'concat_input': False,
+            'dropout_ratio': 0.1,
+            'in_index': 2,
+            'align_corners': False,
+        },
+    },
+}
+
+# Swin Tiny with LPR High Resolution Decoder configuration
+SWIN_TINY_LPR_HI_CONFIG = _build_swin_tiny_decoder_config(
+    'swin_tiny_lpr_hi',
+    'lpr_hi',
+    {
+        'in_channels': [96, 192, 384, 768],
+        'lpr_kwargs': {
+            'in_channels': 3,       # Image channels for the internal UNet
+            'hidden_dim': 256,
+            'cnn_dim': 64,
+            'use_checkpoint': True,
+            'use_ppm': False,
+            'attn_drop': 0,
+            'proj_drop': 0,
+            'drop_path_rate': 0,
+            'ppm_dropout': 0,
+            'spatial_dropout': 0,
+        },
+    },
+)
+
+SWIN_TINY_LPR_HI_NOPOOL_CONFIG = {
+    **SWIN_TINY_LPR_HI_CONFIG,
+    'model': {
+        **SWIN_TINY_LPR_HI_CONFIG['model'],
+        'name': 'swin_tiny_lpr_hi_nopool',
+        'decoder_kwargs': {
+            **SWIN_TINY_LPR_HI_CONFIG['model']['decoder_kwargs'],
+            'lpr_kwargs': {
+                **SWIN_TINY_LPR_HI_CONFIG['model']['decoder_kwargs']['lpr_kwargs'],
+                'use_ppm': False,
+            },
         },
     },
 }
@@ -412,28 +654,6 @@ SWIN_BASE_UNET_CONFIG = {
         },
     },
 }
-
-
-def _build_swin_base_decoder_config(
-    config_name: str,
-    decoder_name: str,
-    decoder_kwargs: dict,
-    *,
-    use_auxiliary_decoder: bool = False,
-    auxiliary_kwargs: dict | None = None,
-) -> dict:
-    """Build a Swin Base variant for a specific decoder."""
-    config = copy.deepcopy(SWIN_BASE_CONFIG)
-    model = config['model']
-    model['name'] = config_name
-    model['decoder'] = decoder_name
-    model['adapter'] = None
-    model['train_encoder'] = True
-    model['use_auxiliary_decoder'] = use_auxiliary_decoder
-    model['decoder_kwargs'] = copy.deepcopy(decoder_kwargs)
-    if auxiliary_kwargs is not None:
-        model['auxiliary_kwargs'] = copy.deepcopy(auxiliary_kwargs)
-    return config
 
 
 SWIN_BASE_UPERNET_CONFIG = _build_swin_base_decoder_config(
@@ -554,6 +774,18 @@ CONFIG = {
     'swin_tiny': SWIN_TINY_CONFIG,
     'swin_small': SWIN_SMALL_CONFIG,
     'swin_base': SWIN_BASE_CONFIG,
+    'swin_tiny_upernet': SWIN_TINY_UPERNET_CONFIG,
+    'swin_tiny_fpn': SWIN_TINY_FPN_CONFIG,
+    'swin_tiny_fcn': SWIN_TINY_FCN_CONFIG,
+    'swin_tiny_psp': SWIN_TINY_PSP_CONFIG,
+    'swin_tiny_deeplabv3': SWIN_TINY_DEEPLABV3_CONFIG,
+    'swin_tiny_deeplabv3plus': SWIN_TINY_DEEPLABV3PLUS_CONFIG,
+    'swin_tiny_segformer': SWIN_TINY_SEGFORMER_CONFIG,
+    'swin_tiny_ocr': SWIN_TINY_OCR_CONFIG,
+    'swin_tiny_tcad': SWIN_TINY_TCAD_CONFIG,
+    'swin_tiny_unet': SWIN_TINY_UNET_CONFIG,
+    'swin_tiny_lpr': SWIN_TINY_LPR_CONFIG,
+    'swin_tiny_lpr_hi_nopool': SWIN_TINY_LPR_HI_NOPOOL_CONFIG,
     'swin_base_upernet': SWIN_BASE_UPERNET_CONFIG,
     'swin_base_fpn': SWIN_BASE_FPN_CONFIG,
     'swin_base_fcn': SWIN_BASE_FCN_CONFIG,
@@ -567,6 +799,7 @@ CONFIG = {
     'swin_large': SWIN_LARGE_CONFIG,
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
     'swin_base_lpr_hi': SWIN_BASE_LPR_HI_CONFIG,
+    'swin_tiny_lpr_hi': SWIN_TINY_LPR_HI_CONFIG,
     'swin_base_lpr_hi_nopool': SWIN_BASE_LPR_HI_NOPOOL_CONFIG,
 }
 
