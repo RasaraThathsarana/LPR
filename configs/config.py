@@ -127,7 +127,7 @@ SWIN_TINY_CONFIG = {
         'decoder': 'upernet',
         'adapter': None,
         'train_encoder': True,
-        'use_auxiliary_decoder': True,
+        'use_auxiliary_decoder': False,
         'name': 'swin_tiny',
         'pretrained': True,
         'pretrain_path': None,  # Will auto-download official ImageNet-22K Swin weights
@@ -332,12 +332,12 @@ SWIN_BASE_LPR_HI_CONFIG = {
         'decoder': 'lpr_hi',
         'decoder_kwargs': {
             # Process all multi-stage features directly from Swin Base
-            'in_channels': [128, 256, 512, 1024],
+            'in_channels': [96, 192, 384, 768], #[128, 256, 512, 1024],
             'lpr_kwargs': {
                 'in_channels': 3,       # Image channels for the internal UNet
                 'hidden_dim': 256,
                 'cnn_dim': 256,
-                'use_checkpoint': True,
+                'use_checkpoint': False,
                 'use_ppm': False,
                 'attn_drop': 0, #0.1,
                 'proj_drop': 0, #0.1,
@@ -539,11 +539,11 @@ SWIN_BASE_TCAD_CONFIG = _build_swin_base_decoder_config(
             'hidden_dim': 256,
             'use_checkpoint': False,
             'use_ppm': False,
-            'attn_drop': 0 #0.1,
-            'proj_drop': 0 #0.1,
-            'drop_path_rate': 0 #0.1,
-            'ppm_dropout': 0 #0.2,
-            'spatial_dropout': 0 #0.2,
+            'attn_drop': 0, #0.1,
+            'proj_drop': 0, #0.1,
+            'drop_path_rate': 0, #0.1,
+            'ppm_dropout': 0, #0.2,
+            'spatial_dropout': 0, #0.2,
         },
     },
 )
