@@ -213,14 +213,20 @@ class LocalPatchRefiner(nn.Module):
         cnn_dim: int = 64,
         use_checkpoint: bool = True,
         use_ppm: bool = True,
+        use_clustering: bool = True,
         attn_drop: float = 0.1,
         proj_drop: float = 0.1,
         drop_path_rate: float = 0.1,
         ppm_dropout: float = 0.2,
+        cluster_patch_size: int = 4,
+        cluster_target_k: int = 4,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.use_ppm = use_ppm
+        self.use_clustering = use_clustering
+        self.cluster_patch_size = cluster_patch_size
+        self.cluster_target_k = cluster_target_k
         
         # Replaced with the strong, memory-efficient extractor
         self.cnn = HighResQueryExtractor(
@@ -352,10 +358,18 @@ class LocalPatchRefiner(nn.Module):
     def forward(self, img, features: List[torch.Tensor]):
         q = self.cnn(img)
         q = q + self.cpe(q) # Re-enabled so clustering knows spatial positions
-        
-        # --- NEW: Cluster & Compact ---
-        # Assuming we want to reduce a 4x4 patch (16 pixels) to 4 representatives (2x2)
-        q_compact, assignments, meta_info = self._cluster_and_compact(q, patch_size=4, target_k=4)
+
+        if self.use_clustering:
+            # Cluster & compact before cross-attention to reduce the high-res sequence length.
+            q_compact, assignments, meta_info = self._cluster_and_compact(
+                q,
+                patch_size=self.cluster_patch_size,
+                target_k=self.cluster_target_k,
+            )
+        else:
+            q_compact = q
+            assignments = None
+            meta_info = None
         
         # Apply PPM to the deepest feature map (Stride 32) if enabled
         enhanced_features = list(features)
@@ -392,8 +406,11 @@ class LocalPatchRefiner(nn.Module):
                  
             q_compact = q_stage
             
-        # --- NEW: Rebuild to Original High-Res Grid ---
-        q = self._rebuild_original(q_compact, assignments, meta_info)
+        # Rebuild only when clustering was enabled.
+        if self.use_clustering:
+            q = self._rebuild_original(q_compact, assignments, meta_info)
+        else:
+            q = q_compact
             
         return q
 

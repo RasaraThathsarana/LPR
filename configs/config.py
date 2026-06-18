@@ -336,6 +336,7 @@ SWIN_BASE_LPR_HI_CONFIG = {
                 'cnn_dim': 256,
                 'use_checkpoint': False,
                 'use_ppm': False,
+                'use_clustering': True,
                 'attn_drop': 0, #0.1,
                 'proj_drop': 0, #0.1,
                 'drop_path_rate': 0, #0.1,
@@ -577,6 +578,7 @@ SWIN_TINY_LPR_HI_CONFIG = _build_swin_tiny_decoder_config(
             'cnn_dim': 64,
             'use_checkpoint': True,
             'use_ppm': False,
+            'use_clustering': True,
             'attn_drop': 0,
             'proj_drop': 0,
             'drop_path_rate': 0,
@@ -612,6 +614,36 @@ SWIN_BASE_LPR_HI_NOPOOL_CONFIG = {
             'lpr_kwargs': {
                 **SWIN_BASE_LPR_HI_CONFIG['model']['decoder_kwargs']['lpr_kwargs'],
                 'use_ppm': False,
+            },
+        },
+    },
+}
+
+SWIN_TINY_LPR_HI_NOCLUSTER_CONFIG = {
+    **SWIN_TINY_LPR_HI_CONFIG,
+    'model': {
+        **SWIN_TINY_LPR_HI_CONFIG['model'],
+        'name': 'swin_tiny_lpr_hi_nocluster',
+        'decoder_kwargs': {
+            **SWIN_TINY_LPR_HI_CONFIG['model']['decoder_kwargs'],
+            'lpr_kwargs': {
+                **SWIN_TINY_LPR_HI_CONFIG['model']['decoder_kwargs']['lpr_kwargs'],
+                'use_clustering': False,
+            },
+        },
+    },
+}
+
+SWIN_BASE_LPR_HI_NOCLUSTER_CONFIG = {
+    **SWIN_BASE_CONFIG,
+    'model': {
+        **SWIN_BASE_LPR_HI_CONFIG['model'],
+        'name': 'swin_base_lpr_hi_nocluster',
+        'decoder_kwargs': {
+            **SWIN_BASE_LPR_HI_CONFIG['model']['decoder_kwargs'],
+            'lpr_kwargs': {
+                **SWIN_BASE_LPR_HI_CONFIG['model']['decoder_kwargs']['lpr_kwargs'],
+                'use_clustering': False,
             },
         },
     },
@@ -800,7 +832,10 @@ CONFIG = {
     'swin_base_lpr': SWIN_BASE_LPR_CONFIG,
     'swin_base_lpr_hi': SWIN_BASE_LPR_HI_CONFIG,
     'swin_tiny_lpr_hi': SWIN_TINY_LPR_HI_CONFIG,
+    'swin_tiny_lpr_hi_nopool': SWIN_TINY_LPR_HI_NOPOOL_CONFIG,
+    'swin_tiny_lpr_hi_nocluster': SWIN_TINY_LPR_HI_NOCLUSTER_CONFIG,
     'swin_base_lpr_hi_nopool': SWIN_BASE_LPR_HI_NOPOOL_CONFIG,
+    'swin_base_lpr_hi_nocluster': SWIN_BASE_LPR_HI_NOCLUSTER_CONFIG,
 }
 
 
