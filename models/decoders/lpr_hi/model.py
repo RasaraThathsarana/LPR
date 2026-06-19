@@ -378,6 +378,7 @@ class LocalPatchRefiner(nn.Module):
         
         # Process Bottom-Up (Fine-to-Coarse) on the COMPACT grid
         # We process q_compact instead of q
+        stage_outputs = []
         for i, (stage, f) in enumerate(zip(self.stages, enhanced_features)):
             
             h_f, w_f = f.shape[2:]
@@ -405,6 +406,7 @@ class LocalPatchRefiner(nn.Module):
                  q_stage = F.pad(q_stage, (0, max(0, -pad_w), 0, max(0, -pad_h)), mode='reflect')
                  
             q_compact = q_stage
+            stage_outputs.append(q_stage)
             
         # Rebuild only when clustering was enabled.
         if self.use_clustering:
@@ -412,7 +414,62 @@ class LocalPatchRefiner(nn.Module):
         else:
             q = q_compact
             
-        return q
+        return q, stage_outputs
+
+
+class MultiLevelSegmentationHead(nn.Module):
+    def __init__(
+        self,
+        in_channels_list: List[int],
+        num_classes: int,
+        channels: int,
+        dropout_ratio: float = 0.2,
+        align_corners: bool = False,
+    ):
+        super().__init__()
+        self.align_corners = align_corners
+
+        self.lateral_convs = nn.ModuleList()
+        for in_ch in in_channels_list:
+            self.lateral_convs.append(
+                nn.Sequential(
+                    nn.Conv2d(in_ch, channels, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(channels),
+                    nn.ReLU(inplace=True),
+                )
+            )
+
+        self.fuse_conv = nn.Sequential(
+            nn.Conv2d(len(in_channels_list) * channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+        self.dropout = nn.Dropout2d(dropout_ratio) if dropout_ratio > 0 else nn.Identity()
+        self.cls_seg = nn.Conv2d(channels, num_classes, kernel_size=1)
+
+    def forward(self, features: List[torch.Tensor], target_size=None):
+        if len(features) != len(self.lateral_convs):
+            raise ValueError(
+                f'Expected {len(self.lateral_convs)} refined feature maps, got {len(features)}.'
+            )
+        if target_size is None:
+            target_size = features[0].shape[2:]
+        outs = []
+        for lateral_conv, feat in zip(self.lateral_convs, features):
+            x = lateral_conv(feat)
+            if x.shape[2:] != target_size:
+                x = F.interpolate(
+                    x,
+                    size=target_size,
+                    mode='bilinear',
+                    align_corners=self.align_corners,
+                )
+            outs.append(x)
+
+        x = torch.cat(outs, dim=1)
+        x = self.fuse_conv(x)
+        x = self.dropout(x)
+        return self.cls_seg(x)
 
 class LPRHiDecoder(Decoder):
     def __init__(self, in_channels: List[int], num_classes: int, lpr_kwargs: dict):
@@ -426,13 +483,13 @@ class LPRHiDecoder(Decoder):
         self.refiner = LocalPatchRefiner(in_channels_list=in_channels, **lpr_kwargs)
         
         hidden_dim = self.refiner.hidden_dim
-        
-        self.cls_seg = nn.Sequential(
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(spatial_dropout), # Applied Spatial Dropout Regularization
-            nn.Conv2d(hidden_dim, num_classes, kernel_size=1)
+
+        self.cls_seg = MultiLevelSegmentationHead(
+            in_channels_list=[hidden_dim] * len(in_channels),
+            num_classes=num_classes,
+            channels=hidden_dim,
+            dropout_ratio=spatial_dropout,
+            align_corners=False,
         )
         
         self._init_weights()
@@ -452,7 +509,7 @@ class LPRHiDecoder(Decoder):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, features: List[torch.Tensor], img: torch.Tensor):
-        refined_features = self.refiner(img, features)
-        out = self.cls_seg(refined_features)
+        _final_refined, stage_features = self.refiner(img, features)
+        out = self.cls_seg(stage_features, target_size=_final_refined.shape[2:])
         # return F.interpolate(out, size=img.shape[2:], mode='bilinear', align_corners=False)
         return out
